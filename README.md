@@ -37,20 +37,20 @@ Configuration (env)
 - `AUTHELIA_INSECURE_SKIP_VERIFY` (default `false`): allow self-signed TLS when talking to Authelia.
 - `AUTHELIA_VERIFY`, `AUTHELIA_ALLOW_HEADER_TOGGLE`, `AUTHELIA_TOGGLE_HEADER`, `AUTHELIA_TIMEOUT_SECONDS`: control Authelia verification and timeouts.
 
-Endpoints
----------
+Endpoints (both root and `/ipremember/`-prefixed aliases)
+---------------------------------------------------------
 
 - `GET /healthz` — liveness probe.
 - `GET /` — minimal HTML page showing remaining time for this IP.
-- `GET /status` — JSON: `{ allowed, expiresAt, ttlSeconds, ip, user }` (user returned only when a valid cookie is present).
-- `GET /auth` — proxy check; 204 if IP allowed, else 401 (or Authelia-verified if configured).
-- `POST /remember` — register current IP/user; requires `Authorization: Bearer <SHARED_SECRET>`. Accepts optional `X-User` header for audit. Issues/refreshes cookie.
-- `POST /admin/clear` — clear all or a specific IP (`ip` form value). Requires bearer token.
-- `GET /admin/list` — list current allowlist. Requires bearer token.
-- `GET /admin/ui` — minimal HTML admin UI; still requires bearer token for actions.
-- `GET /user` — cookie-required user page or JSON showing that user’s trusted IPs and TTLs.
-- `POST /user/extend` — cookie-required; refreshes TTL for an existing IP owned by the cookie user.
-- `POST /user/clear-cookie` — clears the `ipremember` cookie on the caller (does not alter the allowlist entry).
+- `GET /status` (alias: `/ipremember/status`) — JSON: `{ allowed, expiresAt, ttlSeconds, ip, user }` (user returned only when a valid cookie is present).
+- `GET /auth` (alias: `/ipremember/auth`) — proxy check; 204 if IP allowed, else 401 (or Authelia-verified if configured).
+- `POST /remember` (alias: `/ipremember/remember`) — register current IP/user; requires `Authorization: Bearer <SHARED_SECRET>`. Accepts optional `X-User` header for audit. Issues/refreshes cookie.
+- `POST /admin/clear` (alias: `/ipremember/admin/clear`) — clear all or a specific IP (`ip` form value). Requires bearer token.
+- `GET /admin/list` (alias: `/ipremember/admin/list`) — list current allowlist. Requires bearer token.
+- `GET /admin/ui` (alias: `/ipremember/admin/ui`) — minimal HTML admin UI; still requires bearer token for actions.
+- `GET /user` (alias: `/ipremember/user`) — cookie-required user page or JSON showing that user’s trusted IPs and TTLs.
+- `POST /user/extend` (alias: `/ipremember/user/extend`) — cookie-required; refreshes TTL for an existing IP owned by the cookie user.
+- `POST /user/clear-cookie` (alias: `/ipremember/user/clear-cookie`) — clears the `ipremember` cookie on the caller (does not alter the allowlist entry).
 - Admin endpoints (bearer: `Authorization: Bearer $SHARED_SECRET`):
   - `GET /admin/list` — JSON map of IPs and their user/expiry/lastSeen.
   - `POST /admin/clear` — clear all or a specific IP via `ip=<addr>` (query or form).
@@ -110,7 +110,7 @@ Quick start (local/dev)
 -----------------------
 - Dev stack (ipremember only): `./scripts/dev-stack.sh` then hit `http://localhost:8080/status` (or `/`/`/auth`); stop with `docker compose -f docker-compose.dev.yml down`.
 - Full stack (Authelia + Nginx + whoami + ipremember): `./scripts/full-stack.sh` (self-signed certs). ipremember direct: `http://localhost:8080/status`. App via Nginx: `https://app.localtest.me:8443/` (`-k` for curl).
-- Benchmark: `./scripts/benchmark.sh` (curl-based; defaults to HTTPS health checks on Authelia and ipremember, prints median/stddev comparison and elapsed time ~15–40s). Fails if targets are unreachable (no stubs).
+- Benchmark: `./scripts/benchmark.sh` 
 
 Managing sessions / TTLs
 ------------------------

@@ -207,6 +207,16 @@ func main() {
 	mux.HandleFunc("/user/clear-cookie", s.handleUserClearCookie)
 	mux.HandleFunc("/user", s.handleUser)
 	mux.HandleFunc("/user/extend", s.handleUserExtend)
+	// Prefixed aliases to avoid collisions when embedding behind an existing host/app.
+	mux.HandleFunc("/ipremember/status", s.handleStatus)
+	mux.HandleFunc("/ipremember/auth", s.handleAuth)
+	mux.HandleFunc("/ipremember/remember", s.handleRemember)
+	mux.HandleFunc("/ipremember/admin/clear", s.handleAdminClear)
+	mux.HandleFunc("/ipremember/admin/list", s.handleAdminList)
+	mux.HandleFunc("/ipremember/admin/ui", s.handleAdminUI)
+	mux.HandleFunc("/ipremember/user/clear-cookie", s.handleUserClearCookie)
+	mux.HandleFunc("/ipremember/user", s.handleUser)
+	mux.HandleFunc("/ipremember/user/extend", s.handleUserExtend)
 
 	logger.Info("starting server", "addr", cfg.ListenAddr, "duration", cfg.Duration.String(), "maxIPsPerUser", cfg.MaxIPsPerUser)
 	if err := http.ListenAndServe(cfg.ListenAddr, s.logging(mux)); err != nil {
