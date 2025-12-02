@@ -96,6 +96,7 @@ Quick demos
 Images & install
 ----------------
 - CI publishes a multi-arch (amd64 + arm64) image to `ghcr.io/circuitguy/iprememberme` with tags for `latest`, default-branch heads, tags, and SHAs. If GitHub Packages ever shows `unknown/unknown`, rebuild with buildx to refresh metadata.
+- PRs also publish test images as `ghcr.io/circuitguy/iprememberme:pr-<number>` (and `pr-<number>-<sha>`); use them for preview/testing.
 - GitHub Packages links back to this README for setup/env/compose examples; use the stack scripts for local runs and CI-built tags for deployments.
 
 Step-by-step demo (full stack)
