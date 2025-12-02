@@ -22,9 +22,17 @@
 - All allowlist state is in memory; logs to stdout; no disk writes (keeps deployments simple and protects wear-limited media).
 - `/status` only returns `user` when a valid cookie for the caller IP is present; IP-only callers get allowed/TTL without the user. `/user` endpoints are cookie-scoped.
 
+### Agent workflow / best practices
+
+- Run gofmt + unit tests inside the Go container (use `./scripts/dev-stack.sh` or `./scripts/full-stack.sh`; do not run `go` on the host).
+- Prefer the stack scripts for local workflows; they already format, test, build, and smoke-check flows.
+- Keep README and DEVELOPERS in sync whenever behavior/config/testing changes; update both when touching endpoints or scripts.
+- Keep docs/test notes aligned with reality (configs, demo users, TTLs, cookie behavior); add/adjust examples when changing flows.
+- Stack scripts (dev/full/benchmark) should bring Docker up/down automatically; if they don’t, fix the script instead of relying on manual docker invocations.
+
 ### Sanity checks (for PRs/local)
 
-- gofmt + go test ./...
+- gofmt + go test ./... (in container via the scripts above)
 - `./scripts/dev-stack.sh` (401 → remember → 204, `/status`).
 - `./scripts/full-stack.sh` (401 → login → 200, `/status` allowed:true).
 - Admin UI reachable at `/admin/ui` with bearer token; list/clear works.
@@ -40,6 +48,7 @@
 
 ### Next Steps / TODO
 
+- Fix GHCR package to publish proper multi-arch manifests (amd64 + arm64) instead of amd64 + unknown, and surface README/setup link on the package page.
 - Performance test: script to send 10k parallel auth requests without the sidecar vs with it; report median/stddev latencies for both.
 - Add curl/asserts in `scripts/full-stack.sh` to fail fast if `/status` is not allowed:true.
 - Optional: allow toggling Authelia verification via header/env per deployment, and tune timeouts.

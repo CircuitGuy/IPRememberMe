@@ -2,11 +2,11 @@
 # Benchmark auth path with and without ipremember using only curl timings.
 # Defaults hit health endpoints so the stack doesn’t need an active login.
 # Env:
-#   REQUESTS (default 1500)        - number of requests per target (aim ~15-30s on this box)
+#   REQUESTS (default 1500)        - number of requests per target (aim ~15-40s on this box)
 #   DIRECT_URL (default http://localhost:9091/api/health) - Authelia health
 #   IPREMEMBER_URL (default http://localhost:8080/healthz) - ipremember health; set both to HTTPS if desired
 #   CERT_FILE (default certs/selfsigned.crt) - passed to curl for TLS if you switch to HTTPS
-#   AUTO_START=0/1 (default 0)     - start docker-compose.authelia.yml if services are down (off by default)
+#   AUTO_START=0/1 (default 1)     - start docker-compose.authelia.yml if services are down
 #   CURL_TIMEOUT (default 5)       - per-request timeout in seconds
 #   USE_DOCKER_CURL=0/1 (default 0) - run curl inside a fresh container instead of host curl
 # Output: medians/stdevs and a percent comparison; exits on failures (no stubs).
@@ -20,11 +20,16 @@ REQUESTS=${REQUESTS:-1500}
 DIRECT_URL=${DIRECT_URL:-http://localhost:9091/api/health}
 IPREMEMBER_URL=${IPREMEMBER_URL:-https://localhost:8443/healthz}
 CERT_FILE=${CERT_FILE:-"$ROOT/certs/selfsigned.crt"}
-AUTO_START=${AUTO_START:-0}
+AUTO_START=${AUTO_START:-1}
 CURL_TIMEOUT=${CURL_TIMEOUT:-5}
 USE_DOCKER_CURL=${USE_DOCKER_CURL:-0}
 CURL_IMAGE=${CURL_IMAGE:-curlimages/curl:8.4.0}
 RESOLVES=${RESOLVES:-}
+STARTED_STACK=0
+
+log() {
+  >&2 echo "BENCH: $*"
+}
 
 # Load .env if present for convenience
 if [ -f ".env" ]; then
@@ -32,6 +37,84 @@ if [ -f ".env" ]; then
   . "./.env"
   set +a
 fi
+
+ensure_env() {
+  if [ -f ".env" ]; then
+    return
+  fi
+  log "Creating .env from config.example.env"
+  cp config.example.env .env
+  if command -v python3 >/dev/null 2>&1; then
+    NEW_SECRET=$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(16))
+PY
+)
+    tmp=$(mktemp)
+    sed "s/^SHARED_SECRET=.*/SHARED_SECRET=${NEW_SECRET}/" .env >"$tmp"
+    mv "$tmp" .env
+    log "Generated SHARED_SECRET=${NEW_SECRET}"
+  else
+    log "python3 not found; using SHARED_SECRET from config.example.env (update manually if desired)"
+  fi
+}
+
+ensure_certs() {
+  if [ -f "$ROOT/certs/selfsigned.crt" ] && [ -f "$ROOT/certs/selfsigned.key" ]; then
+    return
+  fi
+  if [ -x "$ROOT/scripts/gen-selfsigned.sh" ]; then
+    log "Generating self-signed certificates"
+    "$ROOT/scripts/gen-selfsigned.sh"
+  else
+    log "Missing certs and gen-selfsigned.sh not executable"
+  fi
+}
+
+wait_for_url() {
+  url="$1"; resolve="${2:-}"; retries=40
+  while [ "$retries" -gt 0 ]; do
+    if curl -k -s -o /dev/null $resolve "$url"; then
+      return 0
+    fi
+    retries=$((retries-1))
+    sleep 1
+  done
+  return 1
+}
+
+stack_running() {
+  docker compose -f docker-compose.authelia.yml ps -q ipremember >/dev/null 2>&1 && \
+    [ -n "$(docker compose -f docker-compose.authelia.yml ps -q ipremember)" ]
+}
+
+start_stack() {
+  if ! command -v docker >/dev/null 2>&1; then
+    log "Docker is required for AUTO_START; install Docker or set AUTO_START=0"
+    exit 1
+  fi
+  if stack_running; then
+    return
+  fi
+  ensure_env
+  ensure_certs
+  log "Starting full stack via docker-compose.authelia.yml"
+  docker compose -f docker-compose.authelia.yml up -d --build
+  STARTED_STACK=1
+  log "Waiting for services to become ready"
+  wait_for_url "http://localhost:8080/healthz" || { log "ipremember not ready"; exit 1; }
+  wait_for_url "https://auth.localtest.me:9091/api/health" "--resolve auth.localtest.me:9091:127.0.0.1" || \
+    wait_for_url "http://localhost:9091/api/health" || { log "authelia not ready"; exit 1; }
+  wait_for_url "https://app.localtest.me:8443/healthz" "--resolve app.localtest.me:8443:127.0.0.1" || true
+}
+
+cleanup() {
+  if [ "$STARTED_STACK" -eq 1 ]; then
+    log "Stopping stack started by benchmark"
+    docker compose -f docker-compose.authelia.yml down --remove-orphans
+  fi
+}
+trap cleanup EXIT
 
 check_url() {
   url="$1"
@@ -124,6 +207,14 @@ run_curl() {
 }
 
 # Main flow
+if [ "$AUTO_START" -eq 1 ]; then
+  if ! check_url "$DIRECT_URL" || ! check_url "$IPREMEMBER_URL"; then
+    start_stack
+  else
+    log "Services reachable; AUTO_START skipping bring-up"
+  fi
+fi
+
 direct_url=$(pick_url "$DIRECT_URL" "$DIRECT_URL" http://localhost:9091/api/health https://localhost:9091/api/health http://127.0.0.1:9091/api/health https://127.0.0.1:9091/api/health)
 ip_url=$(pick_url "$IPREMEMBER_URL" "$IPREMEMBER_URL" https://localhost:8443/healthz https://127.0.0.1:8443/healthz http://localhost:8080/healthz http://127.0.0.1:8080/healthz)
 
@@ -139,7 +230,7 @@ if ! check_url "$direct_url"; then direct_ok=0; fi
 if ! check_url "$ip_url"; then ip_ok=0; fi
 
 if [ "$direct_ok" -eq 0 ]; then
-  echo "DIRECT_URL unreachable ($direct_url); start the stack or override the URL."
+  echo "DIRECT_URL unreachable ($direct_url); ensure the stack is up (AUTO_START may have failed) or override the URL."
   exit 1
 else
   direct_out=$(measure "DIRECT" "$direct_url" 2>/dev/null || echo "")
@@ -150,7 +241,7 @@ else
 fi
 
 if [ "$ip_ok" -eq 0 ]; then
-  echo "IPREMEMBER_URL unreachable ($ip_url); start the stack or override the URL."
+  echo "IPREMEMBER_URL unreachable ($ip_url); ensure the stack is up (AUTO_START may have failed) or override the URL."
   exit 1
 else
   ip_out=$(measure "IPREMEMBER" "$ip_url" 2>/dev/null || echo "")

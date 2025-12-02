@@ -27,15 +27,22 @@ Config notes
 
 Testing & scripts
 -----------------
-- Unit tests: `docker run --rm -v "$PWD":/src -w /src golang:1.22-alpine sh -c "apk add --no-cache git curl >/dev/null && go test ./..."`.
+Scripts should manage Docker bring-up/tear-down themselves; avoid manual docker compose unless debugging.
+- Unit tests (container-only; do not run host `go`): `./scripts/dev-stack.sh` (fast path) or `docker run --rm -v "$PWD":/src -w /src golang:1.22-alpine sh -c "apk add --no-cache git curl >/dev/null && go test ./..."`.
 - Dev stack: `./scripts/dev-stack.sh` (build, tests, compose.dev up, workflow smoke).
 - Full stack: `./scripts/full-stack.sh` (build, tests, compose.authelia up, 401→login→200 flow, cookie/no-cookie `/status` checks).
-- Benchmark: `./scripts/benchmark.sh` (curl-based, defaults to ~1,500 requests, progress + median/stddev + percent comparison, exits on failure).
+- Benchmark: `./scripts/benchmark.sh` (curl-based, defaults to ~1,500 requests, auto-starts/stops the full stack if needed, progress + median/stddev + percent comparison, exits on failure). On this machine expect ~15–40s wall clock.
 - Admin UI: `/admin/ui` uses bearer token to list/clear allowlist; `/user` endpoints are cookie-scoped for per-user view/extend.
+
+Packaging / images
+------------------
+- GHCR publish should be multi-arch (amd64 + arm64) with a manifest (no `unknown/unknown` entries) and should surface a README link for setup/compose examples.
 
 PR/agents checklist
 -------------------
 - Keep README and DEVELOPERS aligned when behavior/config changes.
+- Run gofmt + go test ./... in a Go container (stack scripts already do this); avoid running host `go`.
 - Ensure gofmt + go test ./... pass (stack scripts also run tests).
+- Prefer the stack scripts for local validation; update docs/examples when changing flows/config.
 - Update docs when endpoints/config/tests/benchmarks change.
 - Remember cookie/user rules in tests: `/status` user is blank without the valid cookie; present with it.
