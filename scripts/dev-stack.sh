@@ -32,7 +32,7 @@ docker compose -f docker-compose.dev.yml build ipremember
 
 # Run gofmt/tests in a Go container to keep host clean.
 echo "Running gofmt + tests in golang:1.22 container..."
-docker run --rm -v "$ROOT":/src -w /src golang:1.22-alpine sh -c "apk add --no-cache git >/dev/null && gofmt -w main.go main_test.go && go test ./..."
+docker run --rm -v "$ROOT":/src -w /src golang:1.22-alpine sh -c "apk add --no-cache git curl >/dev/null && gofmt -w main.go main_test.go && go test ./..."
 
 # Start the minimal dev stack (ipremember + curl helper).
 echo "Starting dev stack (ipremember + curl helper)..."

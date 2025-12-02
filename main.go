@@ -10,12 +10,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,13 +27,17 @@ import (
 const cookieName = "ipremember"
 
 type config struct {
-	SharedSecret  string
-	Duration      time.Duration
-	MaxIPsPerUser int
-	ListenAddr    string
-	LogLevel      slog.Level
-	AutheliaURL   string
-	InsecureTLS   bool
+	SharedSecret         string
+	Duration             time.Duration
+	MaxIPsPerUser        int
+	ListenAddr           string
+	LogLevel             slog.Level
+	AutheliaURL          string
+	InsecureTLS          bool
+	AutheliaVerify       bool
+	AutheliaAllowHeader  bool
+	AutheliaToggleHeader string
+	AutheliaTimeout      time.Duration
 }
 
 type entry struct {
@@ -46,8 +52,6 @@ type store struct {
 	duration   time.Duration
 	maxPerUser int
 }
-
-var errLimit = errors.New("ip limit reached")
 
 func newStore(duration time.Duration, maxPerUser int) *store {
 	return &store{
@@ -89,15 +93,25 @@ func (s *store) upsert(ip, user string, now time.Time) (entry, error) {
 		return existing, nil
 	}
 
-	// Count existing IPs for this user before adding.
-	count := 0
-	for _, e := range s.entries {
+	// Count existing IPs for this user before adding. Evict oldest when over limit.
+	userIPs := make([]string, 0)
+	for addr, e := range s.entries {
 		if e.User == user {
-			count++
+			userIPs = append(userIPs, addr)
 		}
 	}
-	if count >= s.maxPerUser {
-		return entry{}, errLimit
+	if s.maxPerUser > 0 && len(userIPs) >= s.maxPerUser {
+		// Find the oldest LastSeen entry for this user.
+		oldestIP := userIPs[0]
+		oldest := s.entries[oldestIP]
+		for _, addr := range userIPs[1:] {
+			e := s.entries[addr]
+			if e.LastSeen.Before(oldest.LastSeen) {
+				oldestIP = addr
+				oldest = e
+			}
+		}
+		delete(s.entries, oldestIP)
 	}
 	e := entry{
 		User:      user,
@@ -136,6 +150,20 @@ func (s *store) list(now time.Time) map[string]entry {
 	return out
 }
 
+func (s *store) listByUser(now time.Time, user string) map[string]entry {
+	// Returns entries filtered to a specific user with expired entries removed.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked(now)
+	out := make(map[string]entry)
+	for ip, e := range s.entries {
+		if e.User == user {
+			out[ip] = e
+		}
+	}
+	return out
+}
+
 type server struct {
 	cfg    config
 	store  *store
@@ -151,7 +179,7 @@ func newServer(cfg config, store *store, logger *slog.Logger) *server {
 		logger: logger,
 		secret: []byte(cfg.SharedSecret),
 		client: &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout: cfg.AutheliaTimeout,
 			Transport: &http.Transport{
 				Proxy: http.ProxyFromEnvironment,
 				TLSClientConfig: &tls.Config{
@@ -176,6 +204,8 @@ func main() {
 	mux.HandleFunc("/admin/clear", s.handleAdminClear)
 	mux.HandleFunc("/admin/list", s.handleAdminList)
 	mux.HandleFunc("/admin/ui", s.handleAdminUI)
+	mux.HandleFunc("/user", s.handleUser)
+	mux.HandleFunc("/user/extend", s.handleUserExtend)
 
 	logger.Info("starting server", "addr", cfg.ListenAddr, "duration", cfg.Duration.String(), "maxIPsPerUser", cfg.MaxIPsPerUser)
 	if err := http.ListenAndServe(cfg.ListenAddr, s.logging(mux)); err != nil {
@@ -198,13 +228,23 @@ func loadConfig() config {
 	}
 
 	return config{
-		SharedSecret:  os.Getenv("SHARED_SECRET"),
-		Duration:      time.Duration(durationHours) * time.Hour,
-		MaxIPsPerUser: maxIPsPerUser,
-		ListenAddr:    getenv("LISTEN_ADDR", ":8080"),
-		LogLevel:      level,
-		AutheliaURL:   os.Getenv("AUTHELIA_URL"),
-		InsecureTLS:   getenvBool("AUTHELIA_INSECURE_SKIP_VERIFY", false),
+		SharedSecret:         os.Getenv("SHARED_SECRET"),
+		Duration:             time.Duration(durationHours) * time.Hour,
+		MaxIPsPerUser:        maxIPsPerUser,
+		ListenAddr:           getenv("LISTEN_ADDR", ":8080"),
+		LogLevel:             level,
+		AutheliaURL:          os.Getenv("AUTHELIA_URL"),
+		InsecureTLS:          getenvBool("AUTHELIA_INSECURE_SKIP_VERIFY", false),
+		AutheliaVerify:       getenvBool("AUTHELIA_VERIFY", true),
+		AutheliaAllowHeader:  getenvBool("AUTHELIA_ALLOW_HEADER_TOGGLE", false),
+		AutheliaToggleHeader: getenv("AUTHELIA_TOGGLE_HEADER", "X-Ipremember-Authelia-Verify"),
+		AutheliaTimeout: func() time.Duration {
+			sec := getenvInt("AUTHELIA_TIMEOUT_SECONDS", 5)
+			if sec <= 0 {
+				sec = 5
+			}
+			return time.Duration(sec) * time.Second
+		}(),
 	}
 }
 
@@ -217,7 +257,7 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	// Minimal HTML page showing whether the caller IP is trusted and for how long.
 	ip := clientIP(r)
 	now := time.Now()
-	s.maybeRefreshFromCookie(w, r, ip, now)
+	_, cookieValid := s.maybeRefreshFromCookie(w, r, ip, now)
 	e, ok := s.store.allowed(ip, now)
 	ttl := time.Duration(0)
 	if ok {
@@ -229,14 +269,18 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is <strong>not</strong> trusted.</p></body></html>", ip)
 		return
 	}
-	fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is trusted for approximately %.1f hours.</p><p>User: %s</p><p>Expires at: %s</p></body></html>", ip, ttl.Hours(), e.User, e.ExpiresAt.Format(time.RFC1123))
+	if cookieValid {
+		fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is trusted for approximately %.1f hours.</p><p>User: %s</p><p>Expires at: %s</p></body></html>", ip, ttl.Hours(), e.User, e.ExpiresAt.Format(time.RFC1123))
+		return
+	}
+	fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is trusted for approximately %.1f hours.</p><p>Expires at: %s</p></body></html>", ip, ttl.Hours(), e.ExpiresAt.Format(time.RFC1123))
 }
 
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	// JSON status for the caller IP; attempts a refresh if cookie is present.
 	ip := clientIP(r)
 	now := time.Now()
-	s.maybeRefreshFromCookie(w, r, ip, now)
+	_, cookieValid := s.maybeRefreshFromCookie(w, r, ip, now)
 	e, ok := s.store.allowed(ip, now)
 	resp := map[string]interface{}{
 		"ip":        ip,
@@ -253,6 +297,9 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		resp["user"] = e.User
 		resp["expiresAt"] = e.ExpiresAt
+		if !cookieValid {
+			resp["user"] = ""
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -262,14 +309,14 @@ func (s *server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	// Endpoint intended for proxy auth_request checks. Returns 204 when allowed.
 	ip := clientIP(r)
 	now := time.Now()
-	s.maybeRefreshFromCookie(w, r, ip, now)
+	_, _ = s.maybeRefreshFromCookie(w, r, ip, now)
 	if _, ok := s.store.allowed(ip, now); ok {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
 	// If not yet allowed, try Authelia verification when configured.
-	if s.cfg.AutheliaURL != "" {
+	if s.autheliaEnabled(r) {
 		if user, ok := s.verifyWithAuthelia(r); ok {
 			e, err := s.store.upsert(ip, user.user, now)
 			if err == nil {
@@ -301,10 +348,6 @@ func (s *server) handleRemember(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	e, err := s.store.upsert(ip, user, now)
 	if err != nil {
-		if errors.Is(err, errLimit) {
-			http.Error(w, "max ip limit reached", http.StatusConflict)
-			return
-		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -399,6 +442,127 @@ func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
 `)
 }
 
+func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	user, ok := s.cookieUser(w, r, now)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	raw := s.store.listByUser(now, user)
+	type userEntry struct {
+		IP        string    `json:"ip"`
+		ExpiresAt time.Time `json:"expiresAt"`
+		LastSeen  time.Time `json:"lastSeen"`
+		TTL       int64     `json:"ttlSeconds"`
+	}
+	list := make([]userEntry, 0, len(raw))
+	for ip, e := range raw {
+		list = append(list, userEntry{
+			IP:        ip,
+			ExpiresAt: e.ExpiresAt,
+			LastSeen:  e.LastSeen,
+			TTL:       int64(time.Until(e.ExpiresAt).Seconds()),
+		})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].LastSeen.After(list[j].LastSeen)
+	})
+
+	escUser := html.EscapeString(user)
+
+	if strings.Contains(r.Header.Get("Accept"), "application/json") || r.URL.Query().Get("format") == "json" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"user":    user,
+			"entries": list,
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, `<!DOCTYPE html>
+<html>
+<head>
+  <title>IP Remember - User</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    th, td { border: 1px solid #ccc; padding: 6px; text-align: left; }
+    button { padding: 6px 10px; }
+    .status { margin-top: 10px; font-weight: 600; }
+  </style>
+  <script>
+    async function extend(ip) {
+      const res = await fetch('/user/extend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'ip=' + encodeURIComponent(ip)
+      });
+      const status = document.getElementById('status');
+      if (!res.ok) {
+        status.textContent = 'Extend failed for ' + ip + ': ' + res.status;
+        status.style.color = '#b00020';
+        return;
+      }
+      const data = await res.json();
+      status.textContent = 'Extended ' + ip + ' (ttlSeconds=' + data.ttlSeconds + ')';
+      status.style.color = '#0a6';
+      setTimeout(() => window.location.reload(), 500);
+    }
+  </script>
+</head>
+<body>
+  <h2>Your trusted IPs</h2>
+  <p>Cookie user: `+escUser+`</p>
+  <table>
+    <thead><tr><th>IP</th><th>TTL (s)</th><th>Expires</th><th>Last seen</th><th>Extend</th></tr></thead>
+    <tbody>`)
+	for _, e := range list {
+		escIP := html.EscapeString(e.IP)
+		fmt.Fprintf(w, "<tr><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td><button onclick=\"extend('%s')\">Extend</button></td></tr>",
+			escIP, e.TTL, e.ExpiresAt.Format(time.RFC1123), e.LastSeen.Format(time.RFC1123), escIP)
+	}
+	fmt.Fprint(w, `</tbody>
+  </table>
+  <div id="status" class="status"></div>
+</body>
+</html>`)
+}
+
+func (s *server) handleUserExtend(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	user, ok := s.cookieUser(w, r, now)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ip := r.FormValue("ip")
+	if ip == "" {
+		http.Error(w, "ip required", http.StatusBadRequest)
+		return
+	}
+	entries := s.store.listByUser(now, user)
+	if _, exists := entries[ip]; !exists {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	e, err := s.store.upsert(ip, user, now)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ip":         ip,
+		"expiresAt":  e.ExpiresAt,
+		"ttlSeconds": int64(time.Until(e.ExpiresAt).Seconds()),
+	})
+}
 func (s *server) authorized(r *http.Request) bool {
 	// Simple bearer check using the shared secret; avoids work when unset.
 	if s.cfg.SharedSecret == "" {
@@ -413,24 +577,25 @@ func (s *server) authorized(r *http.Request) bool {
 	return false
 }
 
-func (s *server) maybeRefreshFromCookie(w http.ResponseWriter, r *http.Request, ip string, now time.Time) {
+func (s *server) maybeRefreshFromCookie(w http.ResponseWriter, r *http.Request, ip string, now time.Time) (entry, bool) {
 	// If a valid signed cookie is present for this IP, refresh the entry and cookie.
 	c, err := r.Cookie(cookieName)
 	if err != nil {
-		return
+		return entry{}, false
 	}
 	token, err := parseToken(s.secret, c.Value)
 	if err != nil {
-		return
+		return entry{}, false
 	}
 	if token.IP != ip {
-		return
+		return entry{}, false
 	}
 	e, err := s.store.upsert(ip, token.User, now)
 	if err != nil {
-		return
+		return entry{}, false
 	}
 	s.setCookie(w, ip, e.User, e.ExpiresAt)
+	return e, true
 }
 
 func (s *server) setCookie(w http.ResponseWriter, ip, user string, expires time.Time) {
@@ -510,6 +675,32 @@ func clientIP(r *http.Request) string {
 
 type autheliaResult struct {
 	user string
+}
+
+func (s *server) cookieUser(w http.ResponseWriter, r *http.Request, now time.Time) (string, bool) {
+	ip := clientIP(r)
+	e, ok := s.maybeRefreshFromCookie(w, r, ip, now)
+	if !ok {
+		return "", false
+	}
+	return e.User, true
+}
+
+func (s *server) autheliaEnabled(r *http.Request) bool {
+	if s.cfg.AutheliaURL == "" {
+		return false
+	}
+	enabled := s.cfg.AutheliaVerify
+	if s.cfg.AutheliaAllowHeader {
+		hv := strings.ToLower(strings.TrimSpace(r.Header.Get(s.cfg.AutheliaToggleHeader)))
+		switch hv {
+		case "on", "true", "1", "yes":
+			enabled = true
+		case "off", "false", "0", "no", "skip", "disabled":
+			enabled = false
+		}
+	}
+	return enabled
 }
 
 func (s *server) verifyWithAuthelia(r *http.Request) (autheliaResult, bool) {

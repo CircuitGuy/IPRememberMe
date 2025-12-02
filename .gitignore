@@ -16,6 +16,8 @@ out/
 # Env/config
 .env
 .env.*
+authelia/db.sqlite3
+authelia/notification.txt
 
 # Container output
 ipremember
