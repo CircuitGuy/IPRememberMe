@@ -43,13 +43,6 @@
 - Go service with per-user IP cap (evicts oldest when exceeding limit), Authelia verification fallback, admin UI (`/admin/ui`), `/user` view/extend endpoints.
 - Dev/full-stack scripts with self-signed certs (app/auth SANs).
 - Demo users: `holden.roci` / `race horse battery staple`; `naomi.roci` / `filip`.
+- CI runs gofmt/tests and publishes multi-arch GHCR images (`ghcr.io/circuitguy/iprememberme`) with README-linked metadata.
 - Build/test: `docker run --rm -v "$PWD":/src -w /src golang:1.22-alpine sh -c "apk add --no-cache git >/dev/null && go test ./..."; docker build -t ipremember:dev .`.
 - Unit tests: token round-trip/bad sig; per-user limit (refresh allowed; cross-user allowed).
-
-### Next Steps / TODO
-
-- Fix GHCR package to publish proper multi-arch manifests (amd64 + arm64) instead of amd64 + unknown, and surface README/setup link on the package page.
-- Performance test: script to send 10k parallel auth requests without the sidecar vs with it; report median/stddev latencies for both.
-- Add curl/asserts in `scripts/full-stack.sh` to fail fast if `/status` is not allowed:true.
-- Optional: allow toggling Authelia verification via header/env per deployment, and tune timeouts.
-- Add CI (GitHub Actions) for gofmt/go test/lint; publish image to GHCR with README badges.

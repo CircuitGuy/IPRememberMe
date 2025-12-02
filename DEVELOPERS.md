@@ -28,6 +28,7 @@ Config notes
 Testing & scripts
 -----------------
 Scripts should manage Docker bring-up/tear-down themselves; avoid manual docker compose unless debugging.
+- CI runs gofmt checks and `go test ./...` on pushes/PRs before publishing images.
 - Unit tests (container-only; do not run host `go`): `./scripts/dev-stack.sh` (fast path) or `docker run --rm -v "$PWD":/src -w /src golang:1.22-alpine sh -c "apk add --no-cache git curl >/dev/null && go test ./..."`.
 - Dev stack: `./scripts/dev-stack.sh` (build, tests, compose.dev up, workflow smoke).
 - Full stack: `./scripts/full-stack.sh` (build, tests, compose.authelia up, 401→login→200 flow, cookie/no-cookie `/status` checks).
@@ -36,7 +37,7 @@ Scripts should manage Docker bring-up/tear-down themselves; avoid manual docker 
 
 Packaging / images
 ------------------
-- GHCR publish should be multi-arch (amd64 + arm64) with a manifest (no `unknown/unknown` entries) and should surface a README link for setup/compose examples.
+- CI (`.github/workflows/ci.yml`) publishes multi-arch (amd64 + arm64) images to `ghcr.io/circuitguy/iprememberme` with ref-based tags (`latest`, tags, SHA). GHCR should show the repo README; if metadata regresses to `unknown/unknown`, rebuild via buildx.
 
 PR/agents checklist
 -------------------
