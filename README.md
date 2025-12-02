@@ -65,6 +65,11 @@ Production setup (e.g., Nginx Proxy Manager)
 5. Keep management endpoints sidecar-only (do not expose via the app host); access them directly (e.g., `http://ipremember:8080/admin/list`).
 6. Cookie refresh requires the signed cookie; incognito or another browser on the same IP will not refresh TTL or see the user.
 
+Versioning & releases
+---------------------
+- Version is tracked in `VERSION`; bump it when changing behavior/config. CI enforces a version bump if code/config changes.
+- Release tags (e.g., `v0.2.0`) publish matching image tags to GHCR; preview images are published per PR.
+
 Banner example (HomeAssistant/Jellyfin)
 ---------------------------------------
 

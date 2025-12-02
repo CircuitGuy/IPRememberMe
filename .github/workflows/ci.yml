@@ -12,11 +12,49 @@ env:
   PREVIEW_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/iprememberme-preview
 
 jobs:
-  test:
+  version-check:
+    if: "!startsWith(github.ref, 'refs/tags/')"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Ensure VERSION bumped when code/config changes
+        run: |
+          # Determine base ref for diff
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [ -z "$base" ]; then
+            echo "No base ref; skipping version check"
+            exit 0
+          fi
+          # Files that require a version bump when changed
+          changed=$(git diff --name-only "$base" HEAD -- \
+            '*.go' Dockerfile docker-compose.* nginx/** scripts/** README.md DEVELOPERS.md)
+          if [ -z "$changed" ]; then
+            echo "No code/config changes detected; skipping version check"
+            exit 0
+          fi
+          if git diff --quiet "$base" HEAD -- VERSION; then
+            echo "VERSION must be bumped when code/config changes."
+            echo "Changed files:"
+            echo "$changed"
+            exit 1
+          fi
+          echo "Version bump detected."
+
+  test:
+    needs: [version-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5

@@ -29,6 +29,7 @@
 - Keep README and DEVELOPERS in sync whenever behavior/config/testing changes; update both when touching endpoints or scripts.
 - Keep docs/test notes aligned with reality (configs, demo users, TTLs, cookie behavior); add/adjust examples when changing flows.
 - Stack scripts (dev/full/benchmark) should bring Docker up/down automatically; if they don’t, fix the script instead of relying on manual docker invocations.
+- Always perform a security review for each change: ensure the sidecar reduces risk vs exposing apps directly, confirm headers/cookies/secrets can’t be spoofed, and check common sidecar attack paths (XFF spoofing, bearer leakage, cookie domain/path, admin exposure) are mitigated.
 
 ### Sanity checks (for PRs/local)
 
