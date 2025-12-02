@@ -291,6 +291,138 @@ func TestUserExtendRefreshesTTL(t *testing.T) {
 	}
 }
 
+func TestSetCookieUsesForwardedHost(t *testing.T) {
+	s := newTestServer(t)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/dummy", nil)
+	req.Host = "app.localtest.me:8443"
+	req.Header.Set("X-Forwarded-Host", "app.localtest.me:8443")
+	s.setCookie(rr, req, "1.1.1.1", "alice", time.Now().Add(time.Hour))
+	var found *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == cookieName {
+			found = c
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected cookie to be set")
+	}
+	if found.Domain != "app.localtest.me" {
+		t.Fatalf("expected domain app.localtest.me, got %q", found.Domain)
+	}
+}
+
+func TestUserRequiresCookieEvenWhenAllowedIP(t *testing.T) {
+	s := newTestServer(t)
+	now := time.Now()
+	if _, err := s.store.upsert("1.1.1.1", "alice", now); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/user", nil)
+	req.RemoteAddr = "1.1.1.1:1234"
+	req.Host = "app.localtest.me:8443"
+	req.Header.Set("X-Forwarded-For", "1.1.1.1")
+	rr := httptest.NewRecorder()
+	s.handleUser(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without cookie, got %d", rr.Code)
+	}
+}
+
+func TestUserClearCookie(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/user/clear-cookie", nil)
+	rr := httptest.NewRecorder()
+	s.handleUserClearCookie(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rr.Code)
+	}
+	found := false
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == cookieName {
+			found = true
+			if c.MaxAge != -1 {
+				t.Fatalf("expected MaxAge -1, got %d", c.MaxAge)
+			}
+			if !c.Expires.Before(time.Now().Add(1 * time.Second)) {
+				t.Fatalf("expected expired cookie, got %s", c.Expires)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected ipremember cookie to be cleared")
+	}
+}
+
+func TestAdminEndpointsAuthorized(t *testing.T) {
+	s := newTestServer(t)
+	// Seed entries
+	now := time.Now()
+	if _, err := s.store.upsert("1.2.3.4", "alice", now); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if _, err := s.store.upsert("5.6.7.8", "bob", now); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	// Unauthorized list
+	req := httptest.NewRequest(http.MethodGet, "/admin/list", nil)
+	rr := httptest.NewRecorder()
+	s.handleAdminList(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for missing bearer, got %d", rr.Code)
+	}
+
+	// Authorized list
+	reqAuth := httptest.NewRequest(http.MethodGet, "/admin/list", nil)
+	reqAuth.Header.Set("Authorization", "Bearer "+s.cfg.SharedSecret)
+	rrAuth := httptest.NewRecorder()
+	s.handleAdminList(rrAuth, reqAuth)
+	if rrAuth.Code != http.StatusOK {
+		t.Fatalf("expected 200 for authorized list, got %d", rrAuth.Code)
+	}
+	var listed map[string]entry
+	if err := json.NewDecoder(rrAuth.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(listed))
+	}
+
+	// Authorized clear single IP
+	reqClear := httptest.NewRequest(http.MethodPost, "/admin/clear?ip=1.2.3.4", nil)
+	reqClear.Header.Set("Authorization", "Bearer "+s.cfg.SharedSecret)
+	rrClear := httptest.NewRecorder()
+	s.handleAdminClear(rrClear, reqClear)
+	if rrClear.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 clearing single IP, got %d", rrClear.Code)
+	}
+	if _, ok := s.store.allowed("1.2.3.4", time.Now()); ok {
+		t.Fatalf("expected IP to be cleared")
+	}
+
+	// Clear all (authorized)
+	reqClearAll := httptest.NewRequest(http.MethodPost, "/admin/clear", nil)
+	reqClearAll.Header.Set("Authorization", "Bearer "+s.cfg.SharedSecret)
+	rrClearAll := httptest.NewRecorder()
+	s.handleAdminClear(rrClearAll, reqClearAll)
+	if rrClearAll.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 clearing all, got %d", rrClearAll.Code)
+	}
+	if _, ok := s.store.allowed("5.6.7.8", time.Now()); ok {
+		t.Fatalf("expected all IPs cleared")
+	}
+
+	// Unauthorized clear should fail
+	reqClearBad := httptest.NewRequest(http.MethodPost, "/admin/clear", nil)
+	rrClearBad := httptest.NewRecorder()
+	s.handleAdminClear(rrClearBad, reqClearBad)
+	if rrClearBad.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthorized clear, got %d", rrClearBad.Code)
+	}
+}
+
 func TestBenchmarkScriptRuns(t *testing.T) {
 	// Spin up a tiny HTTP server that always 200s so the benchmark script
 	// has a reachable target without relying on external services.

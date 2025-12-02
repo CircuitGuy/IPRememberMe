@@ -38,7 +38,8 @@ Scripts should manage Docker bring-up/tear-down themselves; avoid manual docker 
 Packaging / images
 ------------------
 - CI (`.github/workflows/ci.yml`) publishes multi-arch (amd64 + arm64) images to `ghcr.io/circuitguy/iprememberme` with ref-based tags (`latest`, tags, SHA). GHCR should show the repo README; if metadata regresses to `unknown/unknown`, rebuild via buildx.
-- PR builds also publish multi-arch images tagged `pr-<number>` and `pr-<number>-<sha>` for testing.
+- PR builds publish preview images to `ghcr.io/circuitguy/iprememberme-preview` tagged `pr-<number>` and `pr-<number>-<sha>` so the main package stays clean.
+- Release tags (e.g., `v0.2.0`) produce matching image tags on the main package.
 
 PR/agents checklist
 -------------------

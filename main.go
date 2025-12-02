@@ -204,6 +204,7 @@ func main() {
 	mux.HandleFunc("/admin/clear", s.handleAdminClear)
 	mux.HandleFunc("/admin/list", s.handleAdminList)
 	mux.HandleFunc("/admin/ui", s.handleAdminUI)
+	mux.HandleFunc("/user/clear-cookie", s.handleUserClearCookie)
 	mux.HandleFunc("/user", s.handleUser)
 	mux.HandleFunc("/user/extend", s.handleUserExtend)
 
@@ -295,11 +296,10 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}(),
 	}
 	if ok {
-		resp["user"] = e.User
-		resp["expiresAt"] = e.ExpiresAt
-		if !cookieValid {
-			resp["user"] = ""
+		if cookieValid {
+			resp["user"] = e.User
 		}
+		resp["expiresAt"] = e.ExpiresAt
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -320,7 +320,7 @@ func (s *server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		if user, ok := s.verifyWithAuthelia(r); ok {
 			e, err := s.store.upsert(ip, user.user, now)
 			if err == nil {
-				s.setCookie(w, ip, e.User, e.ExpiresAt)
+				s.setCookie(w, r, ip, e.User, e.ExpiresAt)
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
@@ -351,7 +351,7 @@ func (s *server) handleRemember(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.setCookie(w, ip, e.User, e.ExpiresAt)
+	s.setCookie(w, r, ip, e.User, e.ExpiresAt)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -364,7 +364,15 @@ func (s *server) handleAdminClear(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("ip")
 	removed := s.store.clear(target)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int{"removed": removed})
+	if target == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if removed == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleAdminList(w http.ResponseWriter, r *http.Request) {
@@ -449,6 +457,7 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	currentIP := clientIP(r)
 	raw := s.store.listByUser(now, user)
 	type userEntry struct {
 		IP        string    `json:"ip"`
@@ -457,7 +466,13 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 		TTL       int64     `json:"ttlSeconds"`
 	}
 	list := make([]userEntry, 0, len(raw))
+	var currentTTL int64
+	var currentExpires time.Time
 	for ip, e := range raw {
+		if ip == currentIP {
+			currentTTL = int64(time.Until(e.ExpiresAt).Seconds())
+			currentExpires = e.ExpiresAt
+		}
 		list = append(list, userEntry{
 			IP:        ip,
 			ExpiresAt: e.ExpiresAt,
@@ -468,8 +483,12 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(list, func(i, j int) bool {
 		return list[i].LastSeen.After(list[j].LastSeen)
 	})
+	if currentTTL < 0 {
+		currentTTL = 0
+	}
 
 	escUser := html.EscapeString(user)
+	escIP := html.EscapeString(currentIP)
 
 	if strings.Contains(r.Header.Get("Accept"), "application/json") || r.URL.Query().Get("format") == "json" {
 		w.Header().Set("Content-Type", "application/json")
@@ -491,8 +510,21 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
     th, td { border: 1px solid #ccc; padding: 6px; text-align: left; }
     button { padding: 6px 10px; }
     .status { margin-top: 10px; font-weight: 600; }
+    .summary { margin: 10px 0; padding: 10px; border: 1px solid #ddd; background: #f8f8f8; }
   </style>
   <script>
+    async function clearCookie() {
+      const res = await fetch('/user/clear-cookie', { method: 'POST' });
+      const status = document.getElementById('status');
+      if (!res.ok) {
+        status.textContent = 'Failed to clear cookie: ' + res.status;
+        status.style.color = '#b00020';
+        return;
+      }
+      status.textContent = 'Auth cookie cleared. Reloading...';
+      status.style.color = '#0a6';
+      setTimeout(() => window.location.reload(), 400);
+    }
     async function extend(ip) {
       const res = await fetch('/user/extend', {
         method: 'POST',
@@ -515,6 +547,16 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 <body>
   <h2>Your trusted IPs</h2>
   <p>Cookie user: `+escUser+`</p>
+  <div class="summary">
+    <p>Current IP: `+escIP+`</p>
+    <p>TTL: `+fmt.Sprintf("%ds", currentTTL)+` `+func() string {
+		if currentTTL <= 0 {
+			return "(not registered yet)"
+		}
+		return fmt.Sprintf("(expires %s)", currentExpires.Format(time.RFC1123))
+	}()+`</p>
+    <button onclick="clearCookie()">Clear auth cookie</button>
+  </div>
   <table>
     <thead><tr><th>IP</th><th>TTL (s)</th><th>Expires</th><th>Last seen</th><th>Extend</th></tr></thead>
     <tbody>`)
@@ -563,6 +605,24 @@ func (s *server) handleUserExtend(w http.ResponseWriter, r *http.Request) {
 		"ttlSeconds": int64(time.Until(e.ExpiresAt).Seconds()),
 	})
 }
+
+func (s *server) handleUserClearCookie(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     cookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
 func (s *server) authorized(r *http.Request) bool {
 	// Simple bearer check using the shared secret; avoids work when unset.
 	if s.cfg.SharedSecret == "" {
@@ -594,13 +654,30 @@ func (s *server) maybeRefreshFromCookie(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		return entry{}, false
 	}
-	s.setCookie(w, ip, e.User, e.ExpiresAt)
+	s.setCookie(w, r, ip, e.User, e.ExpiresAt)
 	return e, true
 }
 
-func (s *server) setCookie(w http.ResponseWriter, ip, user string, expires time.Time) {
+func cookieDomainFromRequest(r *http.Request) string {
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" {
+		return ""
+	}
+	if strings.Contains(host, ":") {
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+	}
+	return host
+}
+
+func (s *server) setCookie(w http.ResponseWriter, r *http.Request, ip, user string, expires time.Time) {
 	// Issues an HttpOnly, secure cookie binding the IP/user/expiry.
 	v := signToken(s.secret, ip, user, expires)
+	domain := cookieDomainFromRequest(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieName,
 		Value:    v,
@@ -609,6 +686,7 @@ func (s *server) setCookie(w http.ResponseWriter, ip, user string, expires time.
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  expires,
+		Domain:   domain,
 	})
 }
 

@@ -50,6 +50,11 @@ Endpoints
 - `GET /admin/ui` — minimal HTML admin UI; still requires bearer token for actions.
 - `GET /user` — cookie-required user page or JSON showing that user’s trusted IPs and TTLs.
 - `POST /user/extend` — cookie-required; refreshes TTL for an existing IP owned by the cookie user.
+- `POST /user/clear-cookie` — clears the `ipremember` cookie on the caller (does not alter the allowlist entry).
+- Admin endpoints (bearer: `Authorization: Bearer $SHARED_SECRET`):
+  - `GET /admin/list` — JSON map of IPs and their user/expiry/lastSeen.
+  - `POST /admin/clear` — clear all or a specific IP via `ip=<addr>` (query or form).
+  - `GET /admin/ui` — simple HTML that lists IPs and allows clear actions (enter the bearer token in the UI). Reachable directly (`http://localhost:8080/admin/ui`); not proxied through the demo app host.
 
 Banner example (HomeAssistant/Jellyfin)
 ---------------------------------------
@@ -93,22 +98,34 @@ Quick demos
 - Full stack (Authelia + Nginx + whoami + ipremember): `./scripts/full-stack.sh` (self-signed certs). ipremember direct: `http://localhost:8080/status`. App via Nginx: `https://app.localtest.me:8443/` (`-k` for curl).
 - Benchmark: `./scripts/benchmark.sh` (curl-based; defaults to HTTPS health checks on Authelia and ipremember, prints median/stddev comparison and elapsed time ~15–40s). Fails if targets are unreachable (no stubs).
 
+Managing sessions / TTLs
+------------------------
+- For your own sessions, visit `/user` (or `/user?format=json`) while the cookie is valid to see your current IPs, TTLs, and last-seen timestamps; extend entries, or clear the auth cookie with the button provided.
+- To check whether the current IP is trusted and its remaining TTL, hit `/status` (user is only returned when the cookie is present).
+- Admins can use `/admin/ui` with the bearer token to list and clear any IPs.
+
 Images & install
 ----------------
 - CI publishes a multi-arch (amd64 + arm64) image to `ghcr.io/circuitguy/iprememberme` with tags for `latest`, default-branch heads, tags, and SHAs. If GitHub Packages ever shows `unknown/unknown`, rebuild with buildx to refresh metadata.
-- PRs also publish test images as `ghcr.io/circuitguy/iprememberme:pr-<number>` (and `pr-<number>-<sha>`); use them for preview/testing.
+- PRs publish preview images to a separate package: `ghcr.io/circuitguy/iprememberme-preview:pr-<number>` (and `pr-<number>-<sha>`). This keeps the main package clean while still enabling PR testing.
 - GitHub Packages links back to this README for setup/env/compose examples; use the stack scripts for local runs and CI-built tags for deployments.
+- Versioning: release tags in GitHub trigger matching image tags (e.g., `v0.2.0` → `ghcr.io/circuitguy/iprememberme:v0.2.0`); preview channel sticks to PR tags.
 
 Step-by-step demo (full stack)
 ------------------------------
+Stack frontmatter (what’s running)
+- `https://app.localtest.me:8443/` — app behind Nginx. Nginx calls ipremember first (`/auth`), then Authelia if needed, then proxies to the demo app (whoami). Only auth traffic flows through the sidecar; management endpoints are not exposed here.
+- `https://auth.localtest.me:9091/` — Authelia UI/API (self-signed cert).
+- ipremember sidecar — tracks trusted IPs, issues cookies, exposes `/status`, `/user`, and admin endpoints; reached directly on `http://localhost:8080` (not via the app host).
+
 1) Run `./scripts/full-stack.sh` (builds, tests, starts Authelia+Nginx+whoami+ipremember with self-signed certs).
 2) In a browser, go to `https://auth.localtest.me:9091/?rd=https://app.localtest.me:8443/` (accept cert warning).
 3) Log in with `holden.roci` / `race horse battery staple` (demo user; see `authelia/users.yml`). You’ll be redirected to `https://app.localtest.me:8443/`. Scripted login in `scripts/full-stack.sh` uses `naomi.roci` / `filip` as another crew user.
 4) Nginx asks ipremember `/auth`; ipremember calls Authelia to verify your session, registers your IP, and returns 204. The whoami app now loads.
-5) Future requests from this IP go straight through. Check `https://app.localtest.me:8443/user` while the cookie is valid to see/extend your IPs, or hit `https://app.localtest.me:8443/status` to view TTL (user omitted without a cookie).
+5) Future requests from this IP go straight through. Hit `http://localhost:8080/status` to confirm `allowed:true` and see the remaining `ttlSeconds`. Visit `http://localhost:8080/user` to see your IP history with TTL + last-seen info, extend entries, or clear the auth cookie from the management page (same browser/session; cookie comes from ipremember directly and user is only shown when the cookie is valid. Incognito mode or a different browser on the same IP will not see the user).
 6) Stop the stack with `docker compose -f docker-compose.authelia.yml down`.
 
-Hosts (if localtest.me doesn’t resolve for you)
+Hosts (if localtest.me doesn’t resolve for you)`
 -----------------------------------------------
 - Some DNS resolvers block or rewrite loopback wildcards. If `app.localtest.me` doesn’t resolve or returns IPv6-only (::1), pin it to IPv4 loopback:
   - Windows (PowerShell as admin): `$hosts = $env:SystemRoot+'\System32\drivers\etc\hosts'; $lines = Get-Content $hosts | Where-Object {$_ -notmatch 'localtest\.me'}; $lines + @('127.0.0.1 localtest.me','127.0.0.1 app.localtest.me','127.0.0.1 auth.localtest.me') | Set-Content -Path $hosts -Encoding ascii; ipconfig /flushdns`

@@ -9,6 +9,7 @@ on:
 env:
   GO_VERSION: "1.22.x"
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/iprememberme
+  PREVIEW_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/iprememberme-preview
 
 jobs:
   test:
@@ -106,7 +107,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_NAME }}
+          images: ${{ env.PREVIEW_IMAGE_NAME }}
           tags: |
             type=raw,value=pr-${{ github.event.number }}
             type=raw,value=pr-${{ github.event.number }}-${{ github.sha }}
