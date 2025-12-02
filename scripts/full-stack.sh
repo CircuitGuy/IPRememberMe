@@ -87,6 +87,25 @@ expect_http 200 "App request with Authelia session cookie (should register IP)" 
 log "Follow-up request without Authelia cookie (should be allowed via ipremember entry)"
 expect_http 200 "App request without session after ipremember registration" --resolve app.localtest.me:8443:127.0.0.1 https://app.localtest.me:8443/
 
+log "Checking /status quickly (without cookie) to ensure allowed=true"
+STATUS_JSON_QUICK=$(curl -s http://localhost:8080/status)
+python3 - "$STATUS_JSON_QUICK" <<'PY'
+import json
+import sys
+
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception as exc:
+    print(f"Failed to parse /status response: {exc}")
+    sys.exit(1)
+
+if not data.get("allowed"):
+    print(f"FAIL: /status.allowed expected true after Authelia login, got: {data}")
+    sys.exit(1)
+print(f"PASS: quick /status allowed={data.get('allowed')} ttlSeconds={data.get('ttlSeconds')}")
+PY
+
 log "Calling /remember directly to ensure cookie is set on client"
 REMEMBER_CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -H "Authorization: Bearer $SHARED_SECRET_VALUE" -H "X-User: naomi.roci" http://localhost:8080/remember)
 if [ "$REMEMBER_CODE" != "204" ]; then

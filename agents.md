@@ -22,9 +22,17 @@
 - All allowlist state is in memory; logs to stdout; no disk writes (keeps deployments simple and protects wear-limited media).
 - `/status` only returns `user` when a valid cookie for the caller IP is present; IP-only callers get allowed/TTL without the user. `/user` endpoints are cookie-scoped.
 
+### Agent workflow / best practices
+
+- Run gofmt + unit tests inside the Go container (use `./scripts/dev-stack.sh` or `./scripts/full-stack.sh`; do not run `go` on the host).
+- Prefer the stack scripts for local workflows; they already format, test, build, and smoke-check flows.
+- Keep README and DEVELOPERS in sync whenever behavior/config/testing changes; update both when touching endpoints or scripts.
+- Keep docs/test notes aligned with reality (configs, demo users, TTLs, cookie behavior); add/adjust examples when changing flows.
+- Stack scripts (dev/full/benchmark) should bring Docker up/down automatically; if they don’t, fix the script instead of relying on manual docker invocations.
+
 ### Sanity checks (for PRs/local)
 
-- gofmt + go test ./...
+- gofmt + go test ./... (in container via the scripts above)
 - `./scripts/dev-stack.sh` (401 → remember → 204, `/status`).
 - `./scripts/full-stack.sh` (401 → login → 200, `/status` allowed:true).
 - Admin UI reachable at `/admin/ui` with bearer token; list/clear works.
@@ -35,12 +43,6 @@
 - Go service with per-user IP cap (evicts oldest when exceeding limit), Authelia verification fallback, admin UI (`/admin/ui`), `/user` view/extend endpoints.
 - Dev/full-stack scripts with self-signed certs (app/auth SANs).
 - Demo users: `holden.roci` / `race horse battery staple`; `naomi.roci` / `filip`.
+- CI runs gofmt/tests and publishes multi-arch GHCR images (`ghcr.io/circuitguy/iprememberme`) with README-linked metadata.
 - Build/test: `docker run --rm -v "$PWD":/src -w /src golang:1.22-alpine sh -c "apk add --no-cache git >/dev/null && go test ./..."; docker build -t ipremember:dev .`.
 - Unit tests: token round-trip/bad sig; per-user limit (refresh allowed; cross-user allowed).
-
-### Next Steps / TODO
-
-- Performance test: script to send 10k parallel auth requests without the sidecar vs with it; report median/stddev latencies for both.
-- Add curl/asserts in `scripts/full-stack.sh` to fail fast if `/status` is not allowed:true.
-- Optional: allow toggling Authelia verification via header/env per deployment, and tune timeouts.
-- Add CI (GitHub Actions) for gofmt/go test/lint; publish image to GHCR with README badges.

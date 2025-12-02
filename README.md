@@ -1,5 +1,7 @@
 Authelia-IPRememberMe
 =====================
+[![CI](https://github.com/CircuitGuy/IPRememberMe/actions/workflows/ci.yml/badge.svg)](https://github.com/CircuitGuy/IPRememberMe/actions/workflows/ci.yml)
+[![Container](https://img.shields.io/badge/ghcr.io-circuitguy%2Fiprememberme-blue?logo=docker)](https://ghcr.io/circuitguy/iprememberme)
 
 What this is
 ------------
@@ -75,7 +77,7 @@ Docker (compose example)
 ```yaml
 services:
   ipremember:
-    image: ghcr.io/your/ipremember:latest
+    image: ghcr.io/circuitguy/iprememberme:latest
     ports:
       - "8080:8080"
     environment:
@@ -89,7 +91,13 @@ Quick demos
 -----------
 - Dev stack (ipremember only): `./scripts/dev-stack.sh` then hit `http://localhost:8080/status` (or `/`/`/auth`); stop with `docker compose -f docker-compose.dev.yml down`.
 - Full stack (Authelia + Nginx + whoami + ipremember): `./scripts/full-stack.sh` (self-signed certs). ipremember direct: `http://localhost:8080/status`. App via Nginx: `https://app.localtest.me:8443/` (`-k` for curl).
-- Benchmark: `./scripts/benchmark.sh` (curl-based; defaults to HTTPS health checks on Authelia and ipremember, prints median/stddev comparison and elapsed time ~15–30s). Fails if targets are unreachable (no stubs).
+- Benchmark: `./scripts/benchmark.sh` (curl-based; defaults to HTTPS health checks on Authelia and ipremember, prints median/stddev comparison and elapsed time ~15–40s). Fails if targets are unreachable (no stubs).
+
+Images & install
+----------------
+- CI publishes a multi-arch (amd64 + arm64) image to `ghcr.io/circuitguy/iprememberme` with tags for `latest`, default-branch heads, tags, and SHAs. If GitHub Packages ever shows `unknown/unknown`, rebuild with buildx to refresh metadata.
+- PRs also publish test images as `ghcr.io/circuitguy/iprememberme:pr-<number>` (and `pr-<number>-<sha>`); use them for preview/testing.
+- GitHub Packages links back to this README for setup/env/compose examples; use the stack scripts for local runs and CI-built tags for deployments.
 
 Step-by-step demo (full stack)
 ------------------------------
