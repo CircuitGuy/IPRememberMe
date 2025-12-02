@@ -6,7 +6,7 @@ Authelia-IPRememberMe
 What this is
 ------------
 
-Lightweight sidecar that sits between your proxy (e.g., Nginx Proxy Manager) and Authelia-protected apps. After one successful Authelia login on an IP, the service marks that IP as trusted for a configurable window (default 24h). While trusted, any device on that IP can skip Authelia challenges for the protected apps. Each touch refreshes the timer. A status page and a user page keep visibility and control simple. When `MAX_IPS_PER_USER` is exceeded, the oldest IP for that user is evicted and replaced by the new one.
+Lightweight sidecar that sits between your proxy (e.g., Nginx Proxy Manager) and Authelia-protected apps. After one successful Authelia login on an IP, the service marks that IP as trusted for a configurable window (default 24h). While trusted, any device on that IP can skip Authelia challenges for the protected apps. **Each touch refreshes the timer only when the signed cookie is present (cookie binds IP+user); plain IP hits do not refresh TTL.** A status page and a user page keep visibility and control simple. When `MAX_IPS_PER_USER` is exceeded, the oldest IP for that user is evicted and replaced by the new one.
 
 Why it exists
 -------------
@@ -22,7 +22,7 @@ How it works (high level)
 
 1. Proxy calls `/auth` first. If the IP is already trusted and not expired, it returns 204 and the request proceeds without Authelia.
 2. If the IP is not trusted, the proxy falls back to your normal Authelia forward-auth. On success, it makes a short subrequest to `/remember` (with the shared secret) to register the IP and set a signed cookie.
-3. Any request carrying the signed cookie and correct IP refreshes the expiry.
+3. Any request carrying the signed cookie and correct IP refreshes the expiry; requests without the cookie do not refresh TTL.
 4. `/` and `/status` show “this IP” remaining time; admin endpoints allow clearing the list; `/user` shows and extends a user’s IPs when a valid cookie is present.
 
 Configuration (env)
@@ -55,6 +55,15 @@ Endpoints
   - `GET /admin/list` — JSON map of IPs and their user/expiry/lastSeen.
   - `POST /admin/clear` — clear all or a specific IP via `ip=<addr>` (query or form).
   - `GET /admin/ui` — simple HTML that lists IPs and allows clear actions (enter the bearer token in the UI). Reachable directly (`http://localhost:8080/admin/ui`); not proxied through the demo app host.
+
+Production setup (e.g., Nginx Proxy Manager)
+--------------------------------------------
+1. Deploy ipremember alongside your proxy and Authelia. Set `SHARED_SECRET` in ipremember and in the proxy env (so it can call `/remember` and admin endpoints).
+2. In Nginx/NPM, add an `auth_request` to `http://ipremember:8080/auth` before forwarding to your app. For NPM custom locations, proxy `/auth` to ipremember and honor 204/401.
+3. On successful Authelia login, have the proxy issue a subrequest to `http://ipremember:8080/remember` with `Authorization: Bearer $SHARED_SECRET` (and optionally `X-User` for audit). This registers the IP and sets the cookie on the client.
+4. Ensure the proxy owns `X-Forwarded-For` so clients cannot spoof IPs.
+5. Keep management endpoints sidecar-only (do not expose via the app host); access them directly (e.g., `http://ipremember:8080/admin/list`).
+6. Cookie refresh requires the signed cookie; incognito or another browser on the same IP will not refresh TTL or see the user.
 
 Banner example (HomeAssistant/Jellyfin)
 ---------------------------------------
@@ -92,8 +101,8 @@ services:
       LOG_LEVEL: info
 ```
 
-Quick demos
------------
+Quick start (local/dev)
+-----------------------
 - Dev stack (ipremember only): `./scripts/dev-stack.sh` then hit `http://localhost:8080/status` (or `/`/`/auth`); stop with `docker compose -f docker-compose.dev.yml down`.
 - Full stack (Authelia + Nginx + whoami + ipremember): `./scripts/full-stack.sh` (self-signed certs). ipremember direct: `http://localhost:8080/status`. App via Nginx: `https://app.localtest.me:8443/` (`-k` for curl).
 - Benchmark: `./scripts/benchmark.sh` (curl-based; defaults to HTTPS health checks on Authelia and ipremember, prints median/stddev comparison and elapsed time ~15–40s). Fails if targets are unreachable (no stubs).
@@ -125,7 +134,7 @@ Stack frontmatter (what’s running)
 5) Future requests from this IP go straight through. Hit `http://localhost:8080/status` to confirm `allowed:true` and see the remaining `ttlSeconds`. Visit `http://localhost:8080/user` to see your IP history with TTL + last-seen info, extend entries, or clear the auth cookie from the management page (same browser/session; cookie comes from ipremember directly and user is only shown when the cookie is valid. Incognito mode or a different browser on the same IP will not see the user).
 6) Stop the stack with `docker compose -f docker-compose.authelia.yml down`.
 
-Hosts (if localtest.me doesn’t resolve for you)`
+Hosts (if localtest.me doesn’t resolve for you)
 -----------------------------------------------
 - Some DNS resolvers block or rewrite loopback wildcards. If `app.localtest.me` doesn’t resolve or returns IPv6-only (::1), pin it to IPv4 loopback:
   - Windows (PowerShell as admin): `$hosts = $env:SystemRoot+'\System32\drivers\etc\hosts'; $lines = Get-Content $hosts | Where-Object {$_ -notmatch 'localtest\.me'}; $lines + @('127.0.0.1 localtest.me','127.0.0.1 app.localtest.me','127.0.0.1 auth.localtest.me') | Set-Content -Path $hosts -Encoding ascii; ipconfig /flushdns`
@@ -137,4 +146,4 @@ Hosts (if localtest.me doesn’t resolve for you)`
 
 More docs
 ---------
-See `DEVELOPERS.md` for deeper configuration, code flow, banners, compose examples, and test commands.
+See [DEVELOPERS.md](DEVELOPERS.md) for deeper configuration, code flow, banners, compose examples, and test commands.
