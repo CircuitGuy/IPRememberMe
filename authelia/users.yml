@@ -1,0 +1,13 @@
+users:
+  holden.roci:
+    displayname: "James Holden"
+    password: "$argon2id$v=19$m=65536,t=3,p=4$ReM+LJ9+8I4JQErRQy7e0g$u4mFtUdFkfa79h1Kg44ZGCADVTvzsc60Ec3xoH+6b6U"
+    email: crew+holden@localtest.me
+    groups:
+      - crew
+  naomi.roci:
+    displayname: "Naomi Nagata"
+    password: "$argon2id$v=19$m=65536,t=3,p=4$/XJJF6IO53jTDr6X7nAshA$6iyFgJ1bGlaHZu07uM5YY9NbnL4hzHlZmAndssMtp1s"
+    email: crew+naomi@localtest.me
+    groups:
+      - crew

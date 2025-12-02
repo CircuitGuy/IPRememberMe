@@ -1,0 +1,19 @@
+[user]
+	name = Your Name
+	email = your.email@example.com
+
+[init]
+	defaultBranch = main
+
+[core]
+	autocrlf = input
+	editor = nano
+
+[color]
+	ui = auto
+
+[pull]
+	rebase = false
+
+[merge]
+	ff = false

@@ -1,0 +1,42 @@
+services:
+  ipremember:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - AUTHELIA_URL=${AUTHELIA_URL:-https://authelia:9091}
+      - AUTHELIA_INSECURE_SKIP_VERIFY=${AUTHELIA_INSECURE_SKIP_VERIFY:-true}
+    ports:
+      - "8080:8080"
+
+  authelia:
+    image: authelia/authelia:latest
+    volumes:
+      - ./authelia:/config
+      - ./certs:/certs:ro
+    ports:
+      - "9091:9091"
+    environment:
+      - TZ=UTC
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - ipremember
+      - authelia
+      - whoami
+    env_file:
+      - .env
+    environment:
+      - IPREMEMBER_SECRET=${SHARED_SECRET}
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
+      - ./certs:/certs:ro
+    ports:
+      - "8443:8443"
+    command: /bin/sh -c "envsubst '$$IPREMEMBER_SECRET' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'"
+
+  whoami:
+    image: traefik/whoami:v1.10.3
+    environment:
+      - WHOAMI_NAME=protected-app
