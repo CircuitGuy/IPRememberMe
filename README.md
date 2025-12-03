@@ -120,10 +120,10 @@ Managing sessions / TTLs
 
 Images & install
 ----------------
-- CI publishes a multi-arch (amd64 + arm64) image to `ghcr.io/circuitguy/iprememberme` with tags for `latest`, default-branch heads, tags, and SHAs. If GitHub Packages ever shows `unknown/unknown`, rebuild with buildx to refresh metadata.
-- PRs publish preview images to a separate package: `ghcr.io/circuitguy/iprememberme-preview:pr-<number>` (and `pr-<number>-<sha>`). This keeps the main package clean while still enabling PR testing.
+- CI publishes a multi-arch (amd64 + arm64) image to `ghcr.io/<owner>/iprememberme` with tags for `latest`, default-branch heads, tags, and SHAs. If GitHub Packages ever shows `unknown/unknown`, rebuild with buildx to refresh metadata.
+- PRs publish preview images to a separate package: `ghcr.io/<owner>/iprememberme-preview:pr-<number>` (and `pr-<number>-<sha>`). This keeps the main package clean while still enabling PR testing.
 - GitHub Packages links back to this README for setup/env/compose examples; use the stack scripts for local runs and CI-built tags for deployments.
-- Versioning: release tags in GitHub trigger matching image tags (e.g., `v0.2.0` → `ghcr.io/circuitguy/iprememberme:v0.2.0`); preview channel sticks to PR tags.
+- Versioning: release tags in GitHub trigger matching image tags (e.g., `v0.2.0` → `ghcr.io/<owner>/iprememberme:v0.2.0`); preview channel sticks to PR tags.
 
 Step-by-step demo (full stack)
 ------------------------------

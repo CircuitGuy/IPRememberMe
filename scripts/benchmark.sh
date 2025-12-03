@@ -17,6 +17,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 REQUESTS=${REQUESTS:-1500}
+DIRECT_URL_SET=""
+IPREMEMBER_URL_SET=""
+if [ -n "${DIRECT_URL:-}" ]; then DIRECT_URL_SET=1; fi
+if [ -n "${IPREMEMBER_URL:-}" ]; then IPREMEMBER_URL_SET=1; fi
 DIRECT_URL=${DIRECT_URL:-http://localhost:9091/api/health}
 IPREMEMBER_URL=${IPREMEMBER_URL:-https://localhost:8443/healthz}
 CERT_FILE=${CERT_FILE:-"$ROOT/certs/selfsigned.crt"}
@@ -31,8 +35,8 @@ log() {
   >&2 echo "BENCH: $*"
 }
 
-# Load .env if present for convenience
-if [ -f ".env" ]; then
+# Load .env if present for convenience, unless caller provided both URLs explicitly.
+if [ -f ".env" ] && [ -z "${DIRECT_URL_SET:-}" ] && [ -z "${IPREMEMBER_URL_SET:-}" ]; then
   set -a
   . "./.env"
   set +a
