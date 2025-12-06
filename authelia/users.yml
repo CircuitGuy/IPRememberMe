@@ -1,0 +1,15 @@
+users:
+  holden.roci:
+    displayname: "James Holden"
+    # Password: racehorse battery staple
+    password: "$argon2id$v=19$m=65536,t=3,p=4$irXLnUgAXpjAwLcUTX93fA$AP5WeOSvXu9KjtIdqWthGsYX3DoY3i47CQ9qdHVIU4Q"
+    email: crew+holden@localtest.me
+    groups:
+      - crew
+  naomi.roci:
+    displayname: "Naomi Nagata"
+    # Password: filip
+    password: "$argon2id$v=19$m=65536,t=3,p=4$/XJJF6IO53jTDr6X7nAshA$6iyFgJ1bGlaHZu07uM5YY9NbnL4hzHlZmAndssMtp1s"
+    email: crew+naomi@localtest.me
+    groups:
+      - crew

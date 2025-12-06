@@ -1,0 +1,42 @@
+theme: light
+
+server:
+  address: tcp://0.0.0.0:9091
+  tls:
+    key: /certs/selfsigned.key
+    certificate: /certs/selfsigned.crt
+
+log:
+  level: info
+
+jwt_secret: change-me-jwt
+
+authentication_backend:
+  file:
+    path: /config/users.yml
+
+session:
+  secret: change-me-session
+  cookies:
+    - name: authelia_session
+      domain: localtest.me
+      authelia_url: https://auth.localtest.me:9091
+      default_redirection_url: https://app.localtest.me:8443/
+      same_site: lax
+  inactivity: 1h
+  expiration: 24h
+
+storage:
+  encryption_key: 0123456789abcdef0123456789abcdef
+  local:
+    path: /config/db.sqlite3
+
+notifier:
+  filesystem:
+    filename: /config/notification.txt
+
+access_control:
+  default_policy: deny
+  rules:
+    - domain: "app.localtest.me"
+      policy: one_factor
