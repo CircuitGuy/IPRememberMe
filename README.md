@@ -66,6 +66,7 @@ Configuration (env)
 Managing sessions / TTLs
 ------------------------
 - For your own sessions, visit `/user` (or `/user?format=json`) while the cookie is valid to see your current IPs, TTLs, and last-seen timestamps; extend entries, or clear the auth cookie.
+- User/admin pages include browser-based city/region/country + ISP lookups via ip-api.com batch API (no server-side calls). Private/reserved IPs skip external lookups to avoid leaking LAN details. Geolocation data by https://ip-api.com.
 - To check whether the current IP is trusted and its remaining TTL, hit `/status` (user is only returned when the cookie is present for security to avoid leaking any important info to untrusted clients).
 - Clearing entries via `/admin/clear` immediately removes trust even if clients still carry the cookie; the next request will redirect through Authelia before ipremember repopulates the entry.
 - Admins can use `/admin/ui` with the bearer token to list and clear any IPs.
@@ -74,14 +75,14 @@ Endpoints (both root and `/ipremember/`-prefixed aliases)
 ---------------------------------------------------------
 
 - `GET /healthz` — liveness probe.
-- `GET /` — minimal HTML page showing remaining time for this IP.
-- `GET /status` (alias: `/ipremember/status`) — JSON: `{ allowed, expiresAt, ttlSeconds, ip, user }` (user returned only when a valid cookie is present).
+- `GET /` — minimal HTML page showing remaining time and geo/ISP for this IP.
+- `GET /status` (alias: `/ipremember/status`) — JSON: `{ allowed, expiresAt, ttlSeconds, ip, user, geo }` (user returned only when a valid cookie is present).
 - `GET /auth` (alias: `/ipremember/auth`) — proxy check; 204 if IP allowed, else 401 (or Authelia-verified if configured).
 - `POST /remember` (alias: `/ipremember/remember`) — register current IP/user; requires `Authorization: Bearer <SHARED_SECRET>`. Accepts optional `X-User` header for audit. Issues/refreshes cookie.
 - `POST /admin/clear` (alias: `/ipremember/admin/clear`) — clear all or a specific IP (`ip` form value). Requires bearer token.
-- `GET /admin/list` (alias: `/ipremember/admin/list`) — list current allowlist. Requires bearer token.
-- `GET /admin/ui` (alias: `/ipremember/admin/ui`) — minimal HTML admin UI; still requires bearer token for actions.
-- `GET /user` (alias: `/ipremember/user`) — cookie-required user page or JSON showing that user’s trusted IPs and TTLs.
+- `GET /admin/list` (alias: `/ipremember/admin/list`) — list current allowlist (includes geo/ISP summaries). Requires bearer token.
+- `GET /admin/ui` (alias: `/ipremember/admin/ui`) — minimal HTML admin UI with per-IP geo/ISP; still requires bearer token for actions.
+- `GET /user` (alias: `/ipremember/user`) — cookie-required user page or JSON showing that user’s trusted IPs, TTLs, and geo/ISP summaries.
 - `POST /user/extend` (alias: `/ipremember/user/extend`) — cookie-required; refreshes TTL for an existing IP owned by the cookie user.
 - `POST /user/clear-cookie` (alias: `/ipremember/user/clear-cookie`) — clears the `ipremember` cookie on the caller (does not alter the allowlist entry).
 - Admin endpoints (bearer: `Authorization: Bearer $SHARED_SECRET`):
@@ -102,28 +103,16 @@ Hosted URLs
 4. Ensure the proxy owns `X-Forwarded-For` so clients cannot spoof IPs.
 5. Keep management endpoints sidecar-only (do not expose via the app host); access them directly (e.g., `http://iprememberme:8080/admin/list`).
 6. Cookie refresh requires the signed cookie; incognito or another browser on the same IP will not refresh TTL or see the user.
-7. (Optional) Add a commented local-network bypass in your proxy config if you want LAN-only traffic to skip Authelia entirely (e.g., trusted home subnets). Use cautiously; uncomment only if you intend to trust those ranges.
+7. (Optional) Add a LAN bypass in your proxy config if you want trusted subnets to skip Authelia entirely. Use cautiously; only allow ranges you truly trust.
 8. iprememberme rejects requests with multi-hop `X-Forwarded-For`; the proxy should send a single client IP and strip user-supplied headers. Cookies are host-only unless `COOKIE_DOMAIN` is set; avoid exposing the service directly to untrusted clients to prevent Host header games. For the provided `auth.localtest.me` / `app.localtest.me` demo, leave `COOKIE_DOMAIN` unset (host-only) since the cookie is issued on `app.localtest.me`.
 
 - Set `SHARED_SECRET` as an environment variable on the NPM container so you can reference it.
 - Update the `set $auth_portal ...` line in the snippet below to match your Authelia portal (e.g., `https://auth.example.com`) so unauthorized users are redirected there.
-- In the proxy host for `app.example.com`, open Custom Nginx Configuration and paste (adjust service names/ports if different). Optional: uncomment the LAN bypass if you intend to trust those ranges. Optional: add a proxied status path `/ipremember/status` that forwards internally to iprememberme if you need the banner.
+- In the proxy host for `app.example.com`, open Custom Nginx Configuration and paste (adjust service names/ports if different). Optional: add a proxied status path `/ipremember/status` that forwards internally to iprememberme if you need the banner.
 Nginx Proxy Manager Config:
 ```
 set $ipremember http://iprememberme:8080;
 set $auth_portal https://auth.example.com;  # Authelia portal URL (used for redirects)
-
-# Uncomment to bypass auth for trusted LAN ranges (use only if you intend to trust these IPs)
-#geo $skip_auth {
-#  default         0;
-#  192.168.0.0/16  1;
-#  10.0.0.0/8      1;
-#}
-
-#if ($skip_auth) {
-#  break;
-#}
-# End of LAN ranges bypassed; these IPs get authorized
 
 location = /ipremember-auth {
   internal;
@@ -134,6 +123,9 @@ location = /ipremember-auth {
   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   proxy_set_header X-Forwarded-Proto $scheme;
   proxy_set_header X-Forwarded-Host $host;
+  proxy_set_header X-Forwarded-URI $request_uri;
+  proxy_set_header X-Original-Method $request_method;
+  proxy_set_header X-Original-URL $scheme://$http_host$request_uri;
 }
 
 location = /ipremember-remember {
@@ -153,27 +145,41 @@ location = /ipremember/status {
   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   proxy_set_header X-Forwarded-Proto $scheme;
   proxy_set_header X-Forwarded-Host $host;
+  proxy_set_header X-Forwarded-URI $request_uri;
+  proxy_set_header X-Original-URL $scheme://$http_host$request_uri;
 }
-
-proxy_intercept_errors on;
-error_page 401 = @authelia_portal;
-auth_request /ipremember-auth;
-auth_request_set $ipremember_cookie $upstream_http_set_cookie;
-add_header Set-Cookie $ipremember_cookie always;
-
-# After Authelia forward-auth succeeds (configured via NPM Access Lists),
-# trigger /ipremember-remember (e.g., custom location/webhook) to register IPs.
 
 location @authelia_portal {
   return 302 $auth_portal/?rd=$scheme://$host$request_uri;
 }
+
+# Main location with auth + Set-Cookie (and optional LAN bypass)
+location / {
+  satisfy any;
+  allow 192.168.0.0/16;
+  allow 10.0.0.0/8;
+  deny all; # only reached if auth_request fails
+
+  proxy_pass http://app-upstream.example.internal:8080; # adjust to your app
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header X-Forwarded-Host $host;
+  proxy_set_header X-Forwarded-URI $request_uri;
+
+  proxy_intercept_errors on;
+  error_page 401 = @authelia_portal;
+  auth_request /ipremember-auth;
+  auth_request_set $ipremember_cookie $upstream_http_set_cookie;
+  add_header Set-Cookie $ipremember_cookie always;
+}
+
 ```
 
-- Point the app upstream to your backend as usual.
+- Point the app upstream to your backend as usual (replace `app-upstream.example.internal:8080`).
 - Authelia stays at `auth.example.com` with your existing forward-auth/access list; ipremember only needs the `auth_request` + `/remember` hook with the shared secret.
-
-- Point the app upstream to your backend as usual.
-- Authelia should be reachable at `https://auth.example.com` (or your chosen hostname). Set `AUTHELIA_URL` to that value (e.g., `AUTHELIA_URL=https://auth.example.com`) in iprememberme if you want iprememberme to verify sessions via Authelia on `/auth`.
+- Authelia should be reachable at `https://auth.example.com` (or your chosen hostname). Set `AUTHELIA_URL` to that value (e.g., `AUTHELIA_URL=https://auth.example.com`) in iprememberme if you want iprememberme to verify sessions via Authelia on `/auth`. If Authelia uses a self-signed cert, set `AUTHELIA_INSECURE_SKIP_VERIFY=true`.
 
 Use a `.env` with shared settings, e.g.:
 ```
@@ -196,7 +202,6 @@ TZ=UTC
 ```
 Then the Docker-Compose:
 ```yaml
-version: "3.9"
 services:
   iprememberme:
     image: ghcr.io/circuitguy/iprememberme:latest

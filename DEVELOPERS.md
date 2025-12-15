@@ -28,6 +28,7 @@ Data model & limits
 - In-memory map: IP -> {user, expiresAt, lastSeen}; no disk writes.
 - Per-user cap: when `MAX_IPS_PER_USER` is exceeded, evict the oldest IP for that user and insert the new one.
 - Background cleanup prunes expired entries.
+- Geo/ISP: browser-side best-effort lookup via ip-api.com batch (https://ip-api.com) for public IPs; skips private/reserved addresses. Surfaced on `/user` and `/admin/ui`; server APIs no longer fetch geo to avoid rate limits.
 
 Config notes
 ------------
