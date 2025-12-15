@@ -147,11 +147,7 @@ func newTestServer(t *testing.T) *server {
 		AutheliaTimeout: 5 * time.Second,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
-	s := newServer(cfg, newStore(cfg.Duration, cfg.MaxIPsPerUser), logger)
-	s.geo.fetch = func(_ *http.Client, ip string) (geoInfo, bool) {
-		return geoInfo{City: "Test City", Country: "Testland", ISP: "Test ISP", Source: "test"}, true
-	}
-	return s
+	return newServer(cfg, newStore(cfg.Duration, cfg.MaxIPsPerUser), logger)
 }
 
 func TestStatusHidesUserWithoutCookie(t *testing.T) {
@@ -483,20 +479,12 @@ func TestAdminEndpointsAuthorized(t *testing.T) {
 	if rrAuth.Code != http.StatusOK {
 		t.Fatalf("expected 200 for authorized list, got %d", rrAuth.Code)
 	}
-	var listed map[string]struct {
-		User      string    `json:"user"`
-		ExpiresAt time.Time `json:"expiresAt"`
-		LastSeen  time.Time `json:"lastSeen"`
-		Geo       geoInfo   `json:"geo"`
-	}
+	var listed map[string]entry
 	if err := json.NewDecoder(rrAuth.Body).Decode(&listed); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
 	if len(listed) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(listed))
-	}
-	if listed["1.2.3.4"].Geo.Summary == "" {
-		t.Fatalf("expected geo summary to be present")
 	}
 
 	// Authorized clear single IP

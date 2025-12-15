@@ -19,7 +19,6 @@ type server struct {
 	logger *slog.Logger
 	secret []byte
 	client *http.Client
-	geo    *geoResolver
 }
 
 func newServer(cfg config, store *store, logger *slog.Logger) *server {
@@ -37,7 +36,6 @@ func newServer(cfg config, store *store, logger *slog.Logger) *server {
 				},
 			},
 		},
-		geo: newGeoResolver(logger),
 	}
 }
 
@@ -82,23 +80,21 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	_, cookieValid := s.maybeRefreshFromCookie(w, r, ip, now)
 	e, ok := s.store.allowed(ip, now)
 	ttl := time.Duration(0)
-	geo := s.geo.Lookup(ip)
 	escIP := html.EscapeString(ip)
-	geoSummary := html.EscapeString(geo.Summary)
 	if ok {
 		ttl = time.Until(e.ExpiresAt)
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if !ok {
-		fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is <strong>not</strong> trusted.</p><p>Geo/ISP: %s</p></body></html>", escIP, geoSummary)
+		fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is <strong>not</strong> trusted.</p><div id=\"geo\"></div><script>fetch('http://ip-api.com/json/%s?fields=status,message,country,regionName,city,isp').then(r=>r.json()).then(d=>{const el=document.getElementById('geo');if(d.status==='success'){el.textContent='Geo/ISP: '+[d.city,d.regionName,d.country].filter(Boolean).join(', ')+' ('+ (d.isp||'unknown') +')';}else{el.textContent='Geo lookup unavailable';}}).catch(()=>{});</script></body></html>", escIP, escIP)
 		return
 	}
 	if cookieValid {
-		fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is trusted for approximately %.1f hours.</p><p>User: %s</p><p>Geo/ISP: %s</p><p>Expires at: %s</p></body></html>", escIP, ttl.Hours(), html.EscapeString(e.User), geoSummary, e.ExpiresAt.Format(time.RFC1123))
+		fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is trusted for approximately %.1f hours.</p><p>User: %s</p><div id=\"geo\"></div><p>Expires at: %s</p><script>fetch('http://ip-api.com/json/%s?fields=status,message,country,regionName,city,isp').then(r=>r.json()).then(d=>{const el=document.getElementById('geo');if(d.status==='success'){el.textContent='Geo/ISP: '+[d.city,d.regionName,d.country].filter(Boolean).join(', ')+' ('+ (d.isp||'unknown') +')';}else{el.textContent='Geo lookup unavailable';}}).catch(()=>{});</script></body></html>", escIP, ttl.Hours(), html.EscapeString(e.User), e.ExpiresAt.Format(time.RFC1123), escIP)
 		return
 	}
-	fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is trusted for approximately %.1f hours.</p><p>Geo/ISP: %s</p><p>Expires at: %s</p></body></html>", escIP, ttl.Hours(), geoSummary, e.ExpiresAt.Format(time.RFC1123))
+	fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is trusted for approximately %.1f hours.</p><div id=\"geo\"></div><p>Expires at: %s</p><script>fetch('http://ip-api.com/json/%s?fields=status,message,country,regionName,city,isp').then(r=>r.json()).then(d=>{const el=document.getElementById('geo');if(d.status==='success'){el.textContent='Geo/ISP: '+[d.city,d.regionName,d.country].filter(Boolean).join(', ')+' ('+ (d.isp||'unknown') +')';}else{el.textContent='Geo lookup unavailable';}}).catch(()=>{});</script></body></html>", escIP, ttl.Hours(), e.ExpiresAt.Format(time.RFC1123), escIP)
 }
 
 // handleStatus returns JSON describing trust state for the caller IP.
@@ -109,14 +105,12 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	_, cookieValid := s.maybeRefreshFromCookie(w, r, ip, now)
-	geo := s.geo.Lookup(ip)
 	e, ok := s.store.allowed(ip, now)
 	resp := map[string]interface{}{
 		"ip":        ip,
 		"allowed":   ok,
 		"user":      "",
 		"expiresAt": nil,
-		"geo":       geo,
 		"ttlSeconds": func() int64 {
 			if !ok {
 				return 0
@@ -220,21 +214,8 @@ func (s *server) handleAdminList(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	list := s.store.list(now)
-	out := make(map[string]struct {
-		entry
-		Geo geoInfo `json:"geo"`
-	}, len(list))
-	for ip, e := range list {
-		out[ip] = struct {
-			entry
-			Geo geoInfo `json:"geo"`
-		}{
-			entry: e,
-			Geo:   s.geo.Lookup(ip),
-		}
-	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(out)
+	json.NewEncoder(w).Encode(list)
 }
 
 func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +233,30 @@ func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
     .hint { color: #555; margin-top: 6px; }
   </style>
   <script>
+    const privateCidrs = [/^10\\./, /^192\\.168\\./, /^172\\.(1[6-9]|2[0-9]|3[0-1])\\./, /^127\\./, /^169\\.254\\./, /:/];
+    function isPublicIP(ip) {
+      return !privateCidrs.some(re => re.test(ip || ''));
+    }
+    function summarizeGeo(res) {
+      if (!res || res.status !== 'success') return 'Geo lookup unavailable';
+      const loc = [res.city, res.regionName, res.country].filter(Boolean).join(', ');
+      const isp = res.isp || 'unknown ISP';
+      return loc ? loc + ' (' + isp + ')' : isp;
+    }
+    async function batchGeoLookup(ips) {
+      const publicIps = Array.from(new Set(ips.filter(isPublicIP)));
+      if (publicIps.length === 0) return {};
+      const res = await fetch('http://ip-api.com/batch?fields=status,message,country,regionName,city,isp,query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(publicIps)
+      });
+      if (!res.ok) return {};
+      const data = await res.json();
+      const out = {};
+      data.forEach(entry => { out[entry.query] = summarizeGeo(entry); });
+      return out;
+    }
     function textCell(value) {
       const td = document.createElement('td');
       td.textContent = value ?? '';
@@ -263,6 +268,7 @@ func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
       const res = await fetch('/admin/list', { headers: { Authorization: 'Bearer ' + token }});
       if (!res.ok) { alert('List failed: ' + res.status); return; }
       const data = await res.json();
+      const geoMap = await batchGeoLookup(Object.keys(data));
       const tbody = document.querySelector('#list tbody');
       tbody.innerHTML = '';
       Object.entries(data).forEach(([ip, entry]) => {
@@ -270,7 +276,7 @@ func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
         tr.appendChild(textCell(ip));
         tr.appendChild(textCell(entry.user));
         tr.appendChild(textCell(entry.expiresAt));
-        const geo = entry.geo && entry.geo.summary ? entry.geo.summary : 'Unknown';
+        const geo = geoMap[ip] || 'Geo lookup skipped';
         tr.appendChild(textCell(geo));
         const btn = document.createElement('button');
         btn.textContent = 'Clear';
@@ -300,7 +306,7 @@ func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
   <label>Bearer token: <input id="token" type="password" placeholder="SHARED_SECRET"></label>
   <button onclick="loadList()">Refresh</button>
   <button onclick="clearAll()">Clear All</button>
-  <div class="hint">Geo/ISP lookups are cached and skipped for private/reserved IPs.</div>
+  <div class="hint">Geo/ISP lookups run in your browser (batched via ip-api.com) and skip private/reserved IPs.</div>
   <div class="hint">Geolocation data by <a href="https://ip-api.com" target="_blank" rel="noopener noreferrer">ip-api.com</a>.</div>
   <table id="list">
     <thead><tr><th>IP</th><th>User</th><th>Expires</th><th>Geo / ISP</th><th>Actions</th></tr></thead>
@@ -329,12 +335,10 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt time.Time `json:"expiresAt"`
 		LastSeen  time.Time `json:"lastSeen"`
 		TTL       int64     `json:"ttlSeconds"`
-		Geo       geoInfo   `json:"geo"`
 	}
 	list := make([]userEntry, 0, len(raw))
 	var currentTTL int64
 	var currentExpires time.Time
-	currentGeo := s.geo.Lookup(currentIP)
 	for ip, e := range raw {
 		if ip == currentIP {
 			currentTTL = int64(time.Until(e.ExpiresAt).Seconds())
@@ -345,7 +349,6 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 			ExpiresAt: e.ExpiresAt,
 			LastSeen:  e.LastSeen,
 			TTL:       int64(time.Until(e.ExpiresAt).Seconds()),
-			Geo:       s.geo.Lookup(ip),
 		})
 	}
 	sort.Slice(list, func(i, j int) bool {
@@ -357,14 +360,12 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 
 	escUser := html.EscapeString(user)
 	escIP := html.EscapeString(currentIP)
-	currentGeoSummary := html.EscapeString(currentGeo.Summary)
 
 	if strings.Contains(r.Header.Get("Accept"), "application/json") || r.URL.Query().Get("format") == "json" {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"user":       user,
-			"entries":    list,
-			"currentGeo": currentGeo,
+			"user":    user,
+			"entries": list,
 		})
 		return
 	}
@@ -419,7 +420,6 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
   <p>Cookie user: `+escUser+`</p>
   <div class="summary">
     <p>Current IP: `+escIP+`</p>
-    <p>Geo/ISP: `+currentGeoSummary+`</p>
     <p>TTL: `+fmt.Sprintf("%ds", currentTTL)+` `+func() string {
 		if currentTTL <= 0 {
 			return "(not registered yet)"
@@ -433,14 +433,56 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
     <tbody>`)
 	for _, e := range list {
 		escIP := html.EscapeString(e.IP)
-		geoSummary := html.EscapeString(e.Geo.Summary)
-		fmt.Fprintf(w, "<tr><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td><button onclick=\"extend('%s')\">Extend</button></td></tr>",
-			escIP, e.TTL, e.ExpiresAt.Format(time.RFC1123), e.LastSeen.Format(time.RFC1123), geoSummary, escIP)
+		fmt.Fprintf(w, "<tr data-ip=\"%s\"><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td class=\"geo\">Loading...</td><td><button onclick=\"extend('%s')\">Extend</button></td></tr>",
+			escIP, escIP, e.TTL, e.ExpiresAt.Format(time.RFC1123), e.LastSeen.Format(time.RFC1123), escIP)
 	}
 	fmt.Fprint(w, `</tbody>
   </table>
+  <div class="hint">Geo/ISP lookups run in your browser (batched via ip-api.com) and skip private/reserved IPs.</div>
   <div class="hint">Geolocation data by <a href="https://ip-api.com" target="_blank" rel="noopener noreferrer">ip-api.com</a>.</div>
   <div id="status" class="status"></div>
+  <script>
+    const privateCidrs = [/^10\./, /^192\.168\./, /^172\.(1[6-9]|2[0-9]|3[0-1])\./, /^127\./, /^169\.254\./, /:/];
+    function isPublicIP(ip) {
+      return !privateCidrs.some(re => re.test(ip || ''));
+    }
+    function summarizeGeo(res) {
+      if (!res || res.status !== 'success') return 'Geo lookup unavailable';
+      const loc = [res.city, res.regionName, res.country].filter(Boolean).join(', ');
+      const isp = res.isp || 'unknown ISP';
+      return loc ? loc + ' (' + isp + ')' : isp;
+    }
+    async function loadGeo() {
+      const rows = Array.from(document.querySelectorAll('tr[data-ip]'));
+      const ips = Array.from(new Set(rows.map(r => r.dataset.ip).filter(isPublicIP)));
+      if (ips.length === 0) {
+        rows.forEach(r => r.querySelector('.geo').textContent = 'Private/reserved IP');
+        return;
+      }
+      const res = await fetch('http://ip-api.com/batch?fields=status,message,country,regionName,city,isp,query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ips)
+      });
+      if (!res.ok) {
+        rows.forEach(r => r.querySelector('.geo').textContent = 'Geo lookup unavailable');
+        return;
+      }
+      const data = await res.json();
+      const map = {};
+      data.forEach(entry => { map[entry.query] = summarizeGeo(entry); });
+      rows.forEach(r => {
+        const ip = r.dataset.ip;
+        const cell = r.querySelector('.geo');
+        if (isPublicIP(ip)) {
+          cell.textContent = map[ip] || 'Geo lookup unavailable';
+        } else {
+          cell.textContent = 'Private/reserved IP';
+        }
+      });
+    }
+    loadGeo();
+  </script>
 </body>
 </html>`)
 }

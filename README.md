@@ -66,7 +66,7 @@ Configuration (env)
 Managing sessions / TTLs
 ------------------------
 - For your own sessions, visit `/user` (or `/user?format=json`) while the cookie is valid to see your current IPs, TTLs, and last-seen timestamps; extend entries, or clear the auth cookie.
-- User/admin pages include a cached city/region/country + ISP lookup for each IP (powered by ip-api.com). Private/reserved IPs skip external lookups to avoid leaking LAN details. Geolocation data by https://ip-api.com.
+- User/admin pages include browser-based city/region/country + ISP lookups via ip-api.com batch API (no server-side calls). Private/reserved IPs skip external lookups to avoid leaking LAN details. Geolocation data by https://ip-api.com.
 - To check whether the current IP is trusted and its remaining TTL, hit `/status` (user is only returned when the cookie is present for security to avoid leaking any important info to untrusted clients).
 - Clearing entries via `/admin/clear` immediately removes trust even if clients still carry the cookie; the next request will redirect through Authelia before ipremember repopulates the entry.
 - Admins can use `/admin/ui` with the bearer token to list and clear any IPs.
