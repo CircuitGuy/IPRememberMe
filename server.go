@@ -19,6 +19,7 @@ type server struct {
 	logger *slog.Logger
 	secret []byte
 	client *http.Client
+	geo    *geoResolver
 }
 
 func newServer(cfg config, store *store, logger *slog.Logger) *server {
@@ -36,6 +37,7 @@ func newServer(cfg config, store *store, logger *slog.Logger) *server {
 				},
 			},
 		},
+		geo: newGeoResolver(logger),
 	}
 }
 
@@ -80,20 +82,23 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	_, cookieValid := s.maybeRefreshFromCookie(w, r, ip, now)
 	e, ok := s.store.allowed(ip, now)
 	ttl := time.Duration(0)
+	geo := s.geo.Lookup(ip)
+	escIP := html.EscapeString(ip)
+	geoSummary := html.EscapeString(geo.Summary)
 	if ok {
 		ttl = time.Until(e.ExpiresAt)
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if !ok {
-		fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is <strong>not</strong> trusted.</p></body></html>", ip)
+		fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is <strong>not</strong> trusted.</p><p>Geo/ISP: %s</p></body></html>", escIP, geoSummary)
 		return
 	}
 	if cookieValid {
-		fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is trusted for approximately %.1f hours.</p><p>User: %s</p><p>Expires at: %s</p></body></html>", ip, ttl.Hours(), e.User, e.ExpiresAt.Format(time.RFC1123))
+		fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is trusted for approximately %.1f hours.</p><p>User: %s</p><p>Geo/ISP: %s</p><p>Expires at: %s</p></body></html>", escIP, ttl.Hours(), html.EscapeString(e.User), geoSummary, e.ExpiresAt.Format(time.RFC1123))
 		return
 	}
-	fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is trusted for approximately %.1f hours.</p><p>Expires at: %s</p></body></html>", ip, ttl.Hours(), e.ExpiresAt.Format(time.RFC1123))
+	fmt.Fprintf(w, "<html><body><h2>Authelia IP Remember</h2><p>IP %s is trusted for approximately %.1f hours.</p><p>Geo/ISP: %s</p><p>Expires at: %s</p></body></html>", escIP, ttl.Hours(), geoSummary, e.ExpiresAt.Format(time.RFC1123))
 }
 
 // handleStatus returns JSON describing trust state for the caller IP.
@@ -104,12 +109,14 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	_, cookieValid := s.maybeRefreshFromCookie(w, r, ip, now)
+	geo := s.geo.Lookup(ip)
 	e, ok := s.store.allowed(ip, now)
 	resp := map[string]interface{}{
 		"ip":        ip,
 		"allowed":   ok,
 		"user":      "",
 		"expiresAt": nil,
+		"geo":       geo,
 		"ttlSeconds": func() int64 {
 			if !ok {
 				return 0
@@ -213,8 +220,21 @@ func (s *server) handleAdminList(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	list := s.store.list(now)
+	out := make(map[string]struct {
+		entry
+		Geo geoInfo `json:"geo"`
+	}, len(list))
+	for ip, e := range list {
+		out[ip] = struct {
+			entry
+			Geo geoInfo `json:"geo"`
+		}{
+			entry: e,
+			Geo:   s.geo.Lookup(ip),
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(list)
+	json.NewEncoder(w).Encode(out)
 }
 
 func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
@@ -229,8 +249,14 @@ func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
     input, button { padding: 6px 8px; margin: 4px 0; }
     table { border-collapse: collapse; width: 100%; margin-top: 12px; }
     th, td { border: 1px solid #ccc; padding: 6px; text-align: left; }
+    .hint { color: #555; margin-top: 6px; }
   </style>
   <script>
+    function textCell(value) {
+      const td = document.createElement('td');
+      td.textContent = value ?? '';
+      return td;
+    }
     async function loadList() {
       const token = document.getElementById('token').value.trim();
       if (!token) { alert('Enter bearer token'); return; }
@@ -241,7 +267,11 @@ func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
       tbody.innerHTML = '';
       Object.entries(data).forEach(([ip, entry]) => {
         const tr = document.createElement('tr');
-        tr.innerHTML = '<td>'+ip+'</td><td>'+entry.user+'</td><td>'+entry.expiresAt+'</td>';
+        tr.appendChild(textCell(ip));
+        tr.appendChild(textCell(entry.user));
+        tr.appendChild(textCell(entry.expiresAt));
+        const geo = entry.geo && entry.geo.summary ? entry.geo.summary : 'Unknown';
+        tr.appendChild(textCell(geo));
         const btn = document.createElement('button');
         btn.textContent = 'Clear';
         btn.onclick = () => clearIP(ip);
@@ -270,8 +300,10 @@ func (s *server) handleAdminUI(w http.ResponseWriter, r *http.Request) {
   <label>Bearer token: <input id="token" type="password" placeholder="SHARED_SECRET"></label>
   <button onclick="loadList()">Refresh</button>
   <button onclick="clearAll()">Clear All</button>
+  <div class="hint">Geo/ISP lookups are cached and skipped for private/reserved IPs.</div>
+  <div class="hint">Geolocation data by <a href="https://ip-api.com" target="_blank" rel="noopener noreferrer">ip-api.com</a>.</div>
   <table id="list">
-    <thead><tr><th>IP</th><th>User</th><th>Expires</th><th>Actions</th></tr></thead>
+    <thead><tr><th>IP</th><th>User</th><th>Expires</th><th>Geo / ISP</th><th>Actions</th></tr></thead>
     <tbody></tbody>
   </table>
 </body>
@@ -297,10 +329,12 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt time.Time `json:"expiresAt"`
 		LastSeen  time.Time `json:"lastSeen"`
 		TTL       int64     `json:"ttlSeconds"`
+		Geo       geoInfo   `json:"geo"`
 	}
 	list := make([]userEntry, 0, len(raw))
 	var currentTTL int64
 	var currentExpires time.Time
+	currentGeo := s.geo.Lookup(currentIP)
 	for ip, e := range raw {
 		if ip == currentIP {
 			currentTTL = int64(time.Until(e.ExpiresAt).Seconds())
@@ -311,6 +345,7 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 			ExpiresAt: e.ExpiresAt,
 			LastSeen:  e.LastSeen,
 			TTL:       int64(time.Until(e.ExpiresAt).Seconds()),
+			Geo:       s.geo.Lookup(ip),
 		})
 	}
 	sort.Slice(list, func(i, j int) bool {
@@ -322,12 +357,14 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
 
 	escUser := html.EscapeString(user)
 	escIP := html.EscapeString(currentIP)
+	currentGeoSummary := html.EscapeString(currentGeo.Summary)
 
 	if strings.Contains(r.Header.Get("Accept"), "application/json") || r.URL.Query().Get("format") == "json" {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"user":    user,
-			"entries": list,
+			"user":       user,
+			"entries":    list,
+			"currentGeo": currentGeo,
 		})
 		return
 	}
@@ -382,6 +419,7 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
   <p>Cookie user: `+escUser+`</p>
   <div class="summary">
     <p>Current IP: `+escIP+`</p>
+    <p>Geo/ISP: `+currentGeoSummary+`</p>
     <p>TTL: `+fmt.Sprintf("%ds", currentTTL)+` `+func() string {
 		if currentTTL <= 0 {
 			return "(not registered yet)"
@@ -391,15 +429,17 @@ func (s *server) handleUser(w http.ResponseWriter, r *http.Request) {
     <button onclick="clearCookie()">Clear auth cookie</button>
   </div>
   <table>
-    <thead><tr><th>IP</th><th>TTL (s)</th><th>Expires</th><th>Last seen</th><th>Extend</th></tr></thead>
+    <thead><tr><th>IP</th><th>TTL (s)</th><th>Expires</th><th>Last seen</th><th>Geo / ISP</th><th>Extend</th></tr></thead>
     <tbody>`)
 	for _, e := range list {
 		escIP := html.EscapeString(e.IP)
-		fmt.Fprintf(w, "<tr><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td><button onclick=\"extend('%s')\">Extend</button></td></tr>",
-			escIP, e.TTL, e.ExpiresAt.Format(time.RFC1123), e.LastSeen.Format(time.RFC1123), escIP)
+		geoSummary := html.EscapeString(e.Geo.Summary)
+		fmt.Fprintf(w, "<tr><td>%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td><button onclick=\"extend('%s')\">Extend</button></td></tr>",
+			escIP, e.TTL, e.ExpiresAt.Format(time.RFC1123), e.LastSeen.Format(time.RFC1123), geoSummary, escIP)
 	}
 	fmt.Fprint(w, `</tbody>
   </table>
+  <div class="hint">Geolocation data by <a href="https://ip-api.com" target="_blank" rel="noopener noreferrer">ip-api.com</a>.</div>
   <div id="status" class="status"></div>
 </body>
 </html>`)
