@@ -1,5 +1,6 @@
 Authelia-IPRememberMe
 =====================
+
 [![CI](https://github.com/CircuitGuy/IPRememberMe/actions/workflows/ci.yml/badge.svg)](https://github.com/CircuitGuy/IPRememberMe/actions/workflows/ci.yml)
 [![Container](https://img.shields.io/badge/ghcr.io-circuitguy%2Fiprememberme-blue?logo=docker)](https://ghcr.io/circuitguy/iprememberme)
 
@@ -7,6 +8,8 @@ What this is
 ------------
 
 Lightweight sidecar that sits between your proxy (e.g., Nginx Proxy Manager) and Authelia-protected apps. After one successful Authelia login on an IP, the service marks that IP as trusted for a configurable window (default 24h). While trusted, any device on that IP can skip Authelia challenges for the protected apps. **Each touch refreshes the timer only when the signed cookie is present (cookie binds IP+user); plain IP hits do not refresh TTL.** A status page and a user page keep visibility and control simple. When `MAX_IPS_PER_USER` is exceeded, the oldest IP for that user is evicted and replaced by the new one.
+
+![Architecture Diagram](docs/ReadmeDiagram.webp)
 
 Why it exists
 -------------
@@ -27,7 +30,9 @@ How it works (high level)
 
 Step-by-step demo (clone this repo and run the app as a self-contained demo)
 ------------------------------
+
 Stack frontmatter (what’s running)
+
 - `https://app.localtest.me:8443/` — app behind Nginx. Nginx calls ipremember first (`/auth`), then Authelia if needed, then proxies to the demo app (whoami). Only auth traffic flows through the sidecar; management endpoints are not exposed here.
 - `https://auth.localtest.me:9091/` — Authelia UI/API (self-signed cert).
 - ipremember sidecar — tracks trusted IPs, issues cookies, exposes `/status`, `/user`, and admin endpoints; reached directly on `http://localhost:8080` (not via the app host).
@@ -42,6 +47,7 @@ Stack frontmatter (what’s running)
 
 Hosts (if localtest.me doesn’t resolve for you)
 -----------------------------------------------
+
 - Some DNS resolvers block or rewrite loopback wildcards. If `app.localtest.me` doesn’t resolve or returns IPv6-only (::1), pin it to IPv4 loopback:
   - Windows (PowerShell as admin): `$hosts = $env:SystemRoot+'\System32\drivers\etc\hosts'; $lines = Get-Content $hosts | Where-Object {$_ -notmatch 'localtest\.me'}; $lines + @('127.0.0.1 localtest.me','127.0.0.1 app.localtest.me','127.0.0.1 auth.localtest.me') | Set-Content -Path $hosts -Encoding ascii; ipconfig /flushdns`
   - Linux: `printf '127.0.0.1 localtest.me\n127.0.0.1 app.localtest.me\n127.0.0.1 auth.localtest.me\n' | sudo tee -a /etc/hosts`
@@ -65,8 +71,9 @@ Configuration (env)
 
 Managing sessions / TTLs
 ------------------------
+
 - For your own sessions, visit `/user` (or `/user?format=json`) while the cookie is valid to see your current IPs, TTLs, and last-seen timestamps; extend entries, or clear the auth cookie.
-- User/admin pages include browser-based city/region/country + ISP lookups via ip-api.com batch API (no server-side calls). Private/reserved IPs skip external lookups to avoid leaking LAN details. Geolocation data by https://ip-api.com.
+- User/admin pages include browser-based city/region/country + ISP lookups via ip-api.com batch API (no server-side calls). Private/reserved IPs skip external lookups to avoid leaking LAN details. Geolocation data by <https://ip-api.com>.
 - To check whether the current IP is trusted and its remaining TTL, hit `/status` (user is only returned when the cookie is present for security to avoid leaking any important info to untrusted clients).
 - Clearing entries via `/admin/clear` immediately removes trust even if clients still carry the cookie; the next request will redirect through Authelia before ipremember repopulates the entry.
 - Admins can use `/admin/ui` with the bearer token to list and clear any IPs.
@@ -92,7 +99,9 @@ Endpoints (both root and `/ipremember/`-prefixed aliases)
 
 Production setup (Nginx Proxy Manager: app.example.com / auth.example.com)
 --------------------------------------------------------------------------
+
 Hosted URLs
+
 - `app.example.com` — your protected app(s) behind the proxy; proxy calls iprememberme `/auth` first.
 - `auth.example.com` — Authelia UI/API (exposed as normal).
 - `iprememberme` — sidecar service; recommended to keep internal. If you need client-visible status, proxy a path on `app.example.com` (e.g., `/ipremember/status`) to iprememberme instead of exposing a separate hostname.
@@ -110,9 +119,12 @@ Hosted URLs
 - Update the `set $auth_portal ...` line in the snippet below to match your Authelia portal (e.g., `https://auth.example.com`) so unauthorized users are redirected there.
 - In the proxy host for `app.example.com`, open Custom Nginx Configuration and paste (adjust service names/ports if different). Optional: add a proxied status path `/ipremember/status` that forwards internally to iprememberme if you need the banner.
 Nginx Proxy Manager Config:
-```
+
+```nginx
 set $ipremember http://iprememberme:8080;
 set $auth_portal https://auth.example.com;  # Authelia portal URL (used for redirects)
+set $realaddr http://10.1.2.3:4567;
+set $SHARED_SECRET REALLY_LONG_SHARED_SECRET_MATCHED_WITH_IPREMEMBERME_CONFIG
 
 location = /ipremember-auth {
   internal;
@@ -120,7 +132,7 @@ location = /ipremember-auth {
   proxy_pass_request_body off;
   proxy_set_header Content-Length "";
   proxy_set_header X-Real-IP $remote_addr;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-For $remote_addr;
   proxy_set_header X-Forwarded-Proto $scheme;
   proxy_set_header X-Forwarded-Host $host;
   proxy_set_header X-Forwarded-URI $request_uri;
@@ -142,7 +154,7 @@ location = /ipremember/status {
   internal;
   proxy_pass $ipremember/ipremember/status;
   proxy_set_header X-Real-IP $remote_addr;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-For $remote_addr;
   proxy_set_header X-Forwarded-Proto $scheme;
   proxy_set_header X-Forwarded-Host $host;
   proxy_set_header X-Forwarded-URI $request_uri;
@@ -155,21 +167,29 @@ location @authelia_portal {
 
 # Main location with auth + Set-Cookie (and optional LAN bypass)
 location / {
-  satisfy any;
-  allow 192.168.0.0/16;
-  allow 10.0.0.0/8;
-  deny all; # only reached if auth_request fails
+  satisfy any; #If client is from a private IP; bypass auth request, comment out for local testing or to always auth
+  
+  #RFC1918 private IPv4
+  allow 192.168.0.0/16; #IPs 192.168.0.0 - 192.168.255.255, LAN Typical of home networks
+  allow 10.0.0.0/8;     #IPs 10.0.0.0 - 10.255.255.255, LAN Typical of enterprise LANs
+  allow 172.16.0.0/12;  #IPs 172.16.0.0 - 172.31.255.255, LAN Typical of Docker networks
 
-  proxy_pass http://app-upstream.example.internal:8080; # adjust to your app
+  #IPv6 local
+  allow fc00::/7;       #IPv6 ULA; IPv6 equivalent of of RFC1918 private ranges
+
+  deny all;
+
+  proxy_pass realaddr;
   proxy_set_header Host $host;
   proxy_set_header X-Real-IP $remote_addr;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-For $remote_addr;
   proxy_set_header X-Forwarded-Proto $scheme;
   proxy_set_header X-Forwarded-Host $host;
   proxy_set_header X-Forwarded-URI $request_uri;
 
   proxy_intercept_errors on;
   error_page 401 = @authelia_portal;
+
   auth_request /ipremember-auth;
   auth_request_set $ipremember_cookie $upstream_http_set_cookie;
   add_header Set-Cookie $ipremember_cookie always;
@@ -182,7 +202,8 @@ location / {
 - Authelia should be reachable at `https://auth.example.com` (or your chosen hostname). Set `AUTHELIA_URL` to that value (e.g., `AUTHELIA_URL=https://auth.example.com`) in iprememberme if you want iprememberme to verify sessions via Authelia on `/auth`. If Authelia uses a self-signed cert, set `AUTHELIA_INSECURE_SKIP_VERIFY=true`.
 
 Use a `.env` with shared settings, e.g.:
-```
+
+```dotenv
 # Required
 SHARED_SECRET=change-me
 AUTHELIA_URL=https://auth.example.com
@@ -200,7 +221,9 @@ IPREMEMBER_HOST_PORT=8080
 # TZ for services (NPM/Authelia)
 TZ=UTC
 ```
+
 Then the Docker-Compose:
+
 ```yaml
 services:
   iprememberme:
@@ -257,6 +280,7 @@ volumes:
 
 Client banner example (status proxied via app host)
 ---------------------------------------------------
+
 If you expose iprememberme status via the app host (e.g., proxy `/ipremember/status` on `app.example.com` to the internal iprememberme `/ipremember/status`), point clients there:
 
 ```js
@@ -278,4 +302,5 @@ renderBanner();
 
 More docs
 ---------
+
 See [DEVELOPERS.md](DEVELOPERS.md) for deeper configuration, code flow, and test commands.
