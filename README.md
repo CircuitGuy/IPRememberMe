@@ -9,6 +9,8 @@ What this is
 
 Lightweight sidecar that sits between your proxy (e.g., Nginx Proxy Manager) and Authelia-protected apps. After one successful Authelia login on an IP, the service marks that IP as trusted for a configurable window (default 24h). While trusted, any device on that IP can skip Authelia challenges for the protected apps. **Each touch refreshes the timer only when the signed cookie is present (cookie binds IP+user); plain IP hits do not refresh TTL.** A status page and a user page keep visibility and control simple. When `MAX_IPS_PER_USER` is exceeded, the oldest IP for that user is evicted and replaced by the new one.
 
+![Architecture Diagram](docs/ReadmeDiagram.webp)
+
 Why it exists
 -------------
 
