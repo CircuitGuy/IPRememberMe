@@ -41,7 +41,7 @@ Testing & scripts
 -----------------
 Scripts should manage Docker bring-up/tear-down themselves; avoid manual docker compose unless debugging.
 - CI runs gofmt checks and `go test ./...` on pushes/PRs before publishing images.
-- Container security lint: `./scripts/container-scan.sh` (builds the image with `IPREMEMBER_IMAGE`, runs hadolint on the Dockerfile, Trivy scan defaulting to `CRITICAL` severity with `--ignore-unfixed`, then Dockle checks). Tune via `TRIVY_SEVERITY`/`TRIVY_IGNORE_UNFIXED`/`DOCKLE_EXIT_LEVEL`. Invoked automatically by the stack scripts and CI; requires Docker + network access for vulnerability DBs.
+- Container security lint: `./scripts/container-scan.sh` (builds the image with `IPREMEMBER_IMAGE`, runs hadolint on the Dockerfile, Trivy scan defaulting to `CRITICAL` severity with `--ignore-unfixed`, then Dockle checks). Tune via `TRIVY_SEVERITY`/`TRIVY_IGNORE_UNFIXED`/`DOCKLE_EXIT_LEVEL`; hadolint ignores DL3007 by default because Chainguard only publishes `latest` for the builder (override with `HADOLINT_ARGS`). Invoked automatically by the stack scripts and CI; requires Docker + network access for vulnerability DBs.
 - Unit tests (container-only; do not run host `go`): `./scripts/dev-stack.sh` (fast path) or `docker run --rm --entrypoint /bin/sh -v "$PWD":/src -w /src cgr.dev/chainguard/go:latest -c "gofmt -w *.go && go test ./..."`.
 - Dev stack: `./scripts/dev-stack.sh` (build, tests, compose.dev up, workflow smoke).
 - Full stack: `./scripts/full-stack.sh` (build, tests, compose.authelia up, 401→login→200 flow, cookie/no-cookie `/status` checks, blocks incognito/no-cookie access).
