@@ -46,5 +46,5 @@
 - Dev/full-stack scripts with self-signed certs (app/auth SANs).
 - Demo users: `holden.roci` / `race horse battery staple`; `naomi.roci` / `filip`.
 - CI runs gofmt/tests and publishes multi-arch GHCR images (`ghcr.io/circuitguy/iprememberme`) with README-linked metadata.
-- Build/test: `docker run --rm -v "$PWD":/src -w /src golang:1.22-alpine sh -c "apk add --no-cache git >/dev/null && go test ./..."; docker build -t ipremember:dev .`.
+- Build/test: `docker run --rm --entrypoint /bin/sh -v "$PWD":/src -w /src cgr.dev/chainguard/go:latest -c "gofmt -w *.go && go test ./..."; docker build -t ipremember:dev .`.
 - Unit tests: token round-trip/bad sig; per-user limit (refresh allowed; cross-user allowed).

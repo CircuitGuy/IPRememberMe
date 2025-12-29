@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine AS builder
+FROM cgr.dev/chainguard/go:latest AS builder
 WORKDIR /src
 COPY . .
 ENV CGO_ENABLED=0

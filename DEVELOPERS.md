@@ -42,10 +42,12 @@ Testing & scripts
 Scripts should manage Docker bring-up/tear-down themselves; avoid manual docker compose unless debugging.
 - CI runs gofmt checks and `go test ./...` on pushes/PRs before publishing images.
 - Container security lint: `./scripts/container-scan.sh` (builds the image with `IPREMEMBER_IMAGE`, runs hadolint on the Dockerfile, Trivy scan defaulting to `CRITICAL` severity with `--ignore-unfixed`, then Dockle checks). Tune via `TRIVY_SEVERITY`/`TRIVY_IGNORE_UNFIXED`/`DOCKLE_EXIT_LEVEL`. Invoked automatically by the stack scripts and CI; requires Docker + network access for vulnerability DBs.
-- Unit tests (container-only; do not run host `go`): `./scripts/dev-stack.sh` (fast path) or `docker run --rm -v "$PWD":/src -w /src golang:1.22-alpine sh -c "apk add --no-cache git curl >/dev/null && go test ./..."`.
+- Unit tests (container-only; do not run host `go`): `./scripts/dev-stack.sh` (fast path) or `docker run --rm --entrypoint /bin/sh -v "$PWD":/src -w /src cgr.dev/chainguard/go:latest -c "gofmt -w *.go && go test ./..."`.
 - Dev stack: `./scripts/dev-stack.sh` (build, tests, compose.dev up, workflow smoke).
 - Full stack: `./scripts/full-stack.sh` (build, tests, compose.authelia up, 401→login→200 flow, cookie/no-cookie `/status` checks, blocks incognito/no-cookie access).
 - Benchmark: `./scripts/benchmark.sh` (curl-based, defaults to ~1,500 requests, auto-starts/stops the full stack if needed, progress + median/stddev + percent comparison, exits on failure). On this machine expect ~15–40s wall clock. Run via the script; no local Go/Docker setup beyond what the script spins up.
+ - Go base image CVEs/versions: https://images.chainguard.dev/directory/image/go/versions lists the current `cgr.dev/chainguard/go` tags and known CVEs (Chainguard publishes only `latest`; CI dynamically detects the Go version from this image).
+ - TODO: I'd like to switch to (newly released) Docker hardened images, but I couldn't figure out how to do this in Github since it requires login. Would appreciate a PR or suggestion if anybody has done this before. ;-)
 - Admin UI: `/admin/ui` uses bearer token to list/clear allowlist; `/user` endpoints are cookie-scoped for per-user view/extend.
 
 Packaging / images
