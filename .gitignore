@@ -23,6 +23,7 @@ authelia/notification.txt
 # Container output
 ipremember
 node_modules/
+.cache/
 
 # Local TLS certs for dev
 certs/

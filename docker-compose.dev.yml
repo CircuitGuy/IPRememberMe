@@ -1,5 +1,6 @@
 services:
   ipremember:
+    image: ${IPREMEMBER_IMAGE:-ipremember:dev}
     build: .
     env_file:
       - .env
