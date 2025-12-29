@@ -7,6 +7,7 @@ on:
   pull_request:
 
 env:
+  IMAGE_DESCRIPTION: "Adds an Authelia 2nd factor that trusts an IP after one login before exposing a self-hosted login screen; simple status/admin UI; everything stored in memory only."
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/iprememberme
   PREVIEW_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/iprememberme-preview
 
@@ -118,6 +119,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_NAME }}
+          annotations: |
+            org.opencontainers.image.description=${{ env.IMAGE_DESCRIPTION }}
+          labels: |
+            org.opencontainers.image.description=${{ env.IMAGE_DESCRIPTION }}
           tags: |
             type=ref,event=branch,enable={{is_default_branch}}
             type=ref,event=tag
@@ -131,6 +136,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
 
   pr-docker:
     needs: test
@@ -161,6 +167,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.PREVIEW_IMAGE_NAME }}
+          annotations: |
+            org.opencontainers.image.description=${{ env.IMAGE_DESCRIPTION }}
+          labels: |
+            org.opencontainers.image.description=${{ env.IMAGE_DESCRIPTION }}
           tags: |
             type=raw,value=pr-${{ github.event.number }}
             type=raw,value=pr-${{ github.event.number }}-${{ github.sha }}
@@ -173,3 +183,4 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
