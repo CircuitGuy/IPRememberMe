@@ -15,6 +15,8 @@ CERT_SCRIPT="$ROOT/scripts/gen-selfsigned.sh"
 COOKIE_JAR=$(mktemp)
 LOGIN_OUT=$(mktemp)
 STACK_UP=0
+IPREMEMBER_IMAGE="${IPREMEMBER_IMAGE:-ipremember:dev}"
+export IPREMEMBER_IMAGE
 
 clear_allowlist() {
   if [ -z "${SHARED_SECRET_VALUE:-}" ]; then
@@ -54,6 +56,9 @@ info "Generating self-signed cert if needed"
 # Run gofmt/tests in a Go container (keeps host clean).
 info "Running gofmt + tests..."
 docker run --rm -v "$ROOT":/src -w /src golang:1.22-alpine sh -c "apk add --no-cache curl >/dev/null && gofmt -w *.go && go test ./..."
+
+info "Running container security checks..."
+"$ROOT/scripts/container-scan.sh"
 
 info "Stopping any existing stack..."
 docker compose -f docker-compose.authelia.yml down --remove-orphans >/dev/null 2>&1 || true

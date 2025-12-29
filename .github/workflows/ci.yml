@@ -74,6 +74,14 @@ jobs:
       - name: go test
         run: go test ./...
 
+      - name: Container security scan
+        env:
+          IPREMEMBER_IMAGE: ipremember:ci
+          TRIVY_SEVERITY: CRITICAL
+          TRIVY_IGNORE_UNFIXED: "true"
+          DOCKLE_EXIT_LEVEL: WARN
+        run: scripts/container-scan.sh
+
   docker:
     needs: test
     if: github.event_name == 'push'

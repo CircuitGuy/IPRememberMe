@@ -8,6 +8,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 ENV_FILE="$ROOT/.env"
+IPREMEMBER_IMAGE="${IPREMEMBER_IMAGE:-ipremember:dev}"
+export IPREMEMBER_IMAGE
 if [ ! -f "$ENV_FILE" ]; then
   echo "Creating .env from config.example.env"
   cp config.example.env "$ENV_FILE"
@@ -27,12 +29,16 @@ fi
 echo "Using env file at $ENV_FILE"
 
 # Build image (dev/demo only).
-echo "Building ipremember image..."
+echo "Building ipremember image (${IPREMEMBER_IMAGE})..."
 docker compose -f docker-compose.dev.yml build ipremember
 
 # Run gofmt/tests in a Go container to keep host clean.
 echo "Running gofmt + tests in golang:1.22 container..."
 docker run --rm -v "$ROOT":/src -w /src golang:1.22-alpine sh -c "apk add --no-cache curl >/dev/null && gofmt -w *.go && go test ./..."
+
+# Run container security checks (hadolint, trivy, dockle).
+echo "Running container security checks..."
+"$ROOT/scripts/container-scan.sh"
 
 # Start the minimal dev stack (ipremember + curl helper).
 echo "Starting dev stack (ipremember + curl helper)..."
