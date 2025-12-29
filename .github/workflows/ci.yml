@@ -124,7 +124,7 @@ jobs:
             type=sha
 
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
@@ -166,7 +166,7 @@ jobs:
             type=raw,value=pr-${{ github.event.number }}-${{ github.sha }}
 
       - name: Build and push (PR)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
