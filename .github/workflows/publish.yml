@@ -56,3 +56,14 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
+
+      - name: Annotate manifests with description
+        env:
+          IMAGE_DESCRIPTION: ${{ env.IMAGE_DESCRIPTION }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          for tag in $TAGS; do
+            echo "Annotating ${tag} with description"
+            docker buildx imagetools create --tag "$tag" --annotation "org.opencontainers.image.description=${IMAGE_DESCRIPTION}" "$tag"
+          done
